@@ -23,8 +23,8 @@ app.get('/health', async (req, res) => {
 });
 
 app.use('/api/v1/integrations', integrationsRouter);
-app.use('/api/v1/webhooks/99food', webhooks99foodRouter);
 app.use('/api/v1/orders/99food', webhooks99foodRouter);
+app.use('/api/v1/orders/99food/orders', webhooks99foodRouter);
 
 app.use((req, res) => { res.status(404).json({ error: 'Rota não encontrada' }); });
 
