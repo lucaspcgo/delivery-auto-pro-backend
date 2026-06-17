@@ -9,11 +9,12 @@ router.post('/', async (req, res) => {
   const body = req.body;
   console.log('[99food webhook] recebido:', JSON.stringify(body));
   try {
-    const orderId = body.order_id || body.orderId;
-    const appShopId = body.app_shop_id || body.appShopId;
+  const orderId = body.order_id || body.orderId || body.data?.order_id || body.data?.order_info?.order_id;
+  const appShopId = body.app_shop_id || body.appShopId;
+  const orderData = body.data?.order_info || body.data || body;
     if (!orderId || !appShopId) { console.warn('[99food webhook] payload sem order_id ou app_shop_id'); return; }
     const tokenData = await food99.getToken(appShopId);
-    const order = await food99.getOrderDetail(tokenData.auth_token, orderId);
+    const order = orderData;
     await pool.query(
       `INSERT INTO orders (platform, platform_order_id, app_shop_id, status, customer_name, customer_phone, delivery_address, items, total_price, raw_payload, created_at, updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now(),now())
