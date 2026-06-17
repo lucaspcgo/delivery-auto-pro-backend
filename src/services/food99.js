@@ -1,9 +1,11 @@
-
 const https = require('https');
 
 const BASE_URL = 'openapi.didi-food.com';
 const APP_ID = process.env.FOOD99_APP_ID;
 const APP_SECRET = process.env.FOOD99_APP_SECRET;
+
+// Cache de tokens em memória
+const tokenCache = {};
 
 function apiGet(path) {
   return new Promise((resolve, reject) => {
@@ -47,6 +49,32 @@ async function getToken(appShopId) {
   return result.data;
 }
 
+// Retorna token válido, renovando automaticamente se necessário
+async function getValidToken(appShopId) {
+  const cached = tokenCache[appShopId];
+  const agora = Math.floor(Date.now() / 1000);
+
+  // Se tem token com mais de 5 minutos de validade, usa o cache
+  if (cached && cached.expiration > agora + 300) {
+    console.log(`[99food] usando token em cache para ${appShopId}`);
+    return cached.token;
+  }
+
+  // Renova o token
+  console.log(`[99food] renovando token para ${appShopId}...`);
+  await refreshToken(appShopId);
+  const data = await getToken(appShopId);
+
+  // Salva no cache
+  tokenCache[appShopId] = {
+    token: data.auth_token,
+    expiration: data.token_expiration_time,
+  };
+
+  console.log(`[99food] token renovado, expira em ${new Date(data.token_expiration_time * 1000).toISOString()}`);
+  return data.auth_token;
+}
+
 async function getOrderDetail(authToken, orderId) {
   const path = `/v1/order/order/detail?auth_token=${encodeURIComponent(authToken)}&order_id=${orderId}`;
   const result = await apiGet(path);
@@ -66,4 +94,4 @@ async function cancelOrder(authToken, orderId, cancelCode = 1040) {
   return result.data;
 }
 
-module.exports = { refreshToken, getToken, getOrderDetail, confirmOrder, cancelOrder };
+module.exports = { refreshToken, getToken, getValidToken, getOrderDetail, confirmOrder, cancelOrder };
