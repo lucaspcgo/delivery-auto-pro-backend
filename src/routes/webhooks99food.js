@@ -22,7 +22,7 @@ router.post('/', async (req, res) => {
       ['99food', String(order.order_id), appShopId, String(order.status),
        order.receive_address?.name || null, order.receive_address?.phone || null,
        order.receive_address?.addr || null, JSON.stringify(order.order_items || []),
-       order.price?.actual_amount || 0, JSON.stringify(order)]
+       (order.price?.actual_amount || order.price?.order_price || 0) / 100, JSON.stringify(order)]
     );
     await pool.query(`UPDATE integrations SET orders_count=orders_count+1, last_sync_at=now(), updated_at=now() WHERE platform='99food'`);
     console.log(`[99food webhook] pedido ${orderId} salvo`);
