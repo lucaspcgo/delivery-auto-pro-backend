@@ -39,8 +39,8 @@ router.post('/:orderId/confirm', async (req, res) => {
   const { app_shop_id } = req.body;
   if (!app_shop_id) return res.status(400).json({ error: 'app_shop_id é obrigatório' });
   try {
-    const tokenData = await food99.getToken(app_shop_id);
-    await food99.confirmOrder(tokenData.auth_token, orderId);
+    const authToken = await food99.getValidToken(app_shop_id);
+    await food99.confirmOrder(authToken, orderId);
     await pool.query(`UPDATE orders SET status='confirmed', updated_at=now() WHERE platform='99food' AND platform_order_id=$1`, [orderId]);
     console.log(`[confirm] pedido ${orderId} confirmado`);
     return res.json({ success: true });
@@ -55,8 +55,8 @@ router.post('/:orderId/cancel', async (req, res) => {
   const { app_shop_id, cancel_code } = req.body;
   if (!app_shop_id) return res.status(400).json({ error: 'app_shop_id é obrigatório' });
   try {
-    const tokenData = await food99.getToken(app_shop_id);
-    await food99.cancelOrder(tokenData.auth_token, orderId, cancel_code || 1040);
+    const authToken = await food99.getValidToken(app_shop_id);
+    await food99.cancelOrder(authToken, orderId, cancel_code || 1040);
     await pool.query(`UPDATE orders SET status='cancelled', updated_at=now() WHERE platform='99food' AND platform_order_id=$1`, [orderId]);
     console.log(`[cancel] pedido ${orderId} cancelado`);
     return res.json({ success: true });
