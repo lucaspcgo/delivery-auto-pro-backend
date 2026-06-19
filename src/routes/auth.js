@@ -6,7 +6,6 @@ const router = express.Router();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'delivery-auto-pro-secret-2026';
 
-// POST /api/v1/auth/login
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
@@ -38,7 +37,6 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// GET /api/v1/auth/me — retorna dados do usuário logado
 router.get('/me', async (req, res) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -53,10 +51,7 @@ router.get('/me', async (req, res) => {
   }
 });
 
-module.exports = router;
-
-
-// TEMPORÁRIO — criar/resetar senha (remover depois)
+// TEMPORÁRIO — resetar senha (remover depois)
 router.post('/reset-password', async (req, res) => {
   const { email, newPassword } = req.body;
   if (!email || !newPassword) return res.status(400).json({ error: 'email e newPassword obrigatórios' });
@@ -66,3 +61,5 @@ router.post('/reset-password', async (req, res) => {
     return res.json({ success: true, message: 'Senha atualizada' });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
+
+module.exports = router;
