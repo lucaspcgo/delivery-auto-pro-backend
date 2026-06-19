@@ -5,6 +5,7 @@ const pool = require('./db/postgres');
 const redis = require('./db/redis');
 const integrationsRouter = require('./routes/integrations');
 const webhooks99foodRouter = require('./routes/webhooks99food');
+const webhooksifoodRouter = require('./routes/webhooksifood');
 const app = express();
 const PORT = process.env.PORT || 3001;
 app.use(cors());
@@ -19,5 +20,7 @@ app.get('/health', async (req, res) => {
 app.use('/api/v1/integrations', integrationsRouter);
 app.use('/api/v1/webhooks/99food', webhooks99foodRouter);
 app.use('/api/v1/orders/99food', webhooks99foodRouter);
+app.use('/api/v1/webhooks/ifood', webhooksifoodRouter);
+app.use('/api/v1/orders/ifood', webhooksifoodRouter);
 app.use((req, res) => { res.status(404).json({ error: 'Rota não encontrada' }); });
 app.listen(PORT, () => { console.log(`Delivery Auto Pro backend rodando na porta ${PORT}`); });
