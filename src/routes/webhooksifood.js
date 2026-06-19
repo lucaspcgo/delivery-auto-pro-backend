@@ -1,9 +1,9 @@
 const express = require('express');
 const pool = require('../db/postgres');
 const ifood = require('../services/ifood');
+const { tryAutoAccept } = require('../services/autoAccept');
 const router = express.Router();
 
-// POST /api/v1/webhooks/ifood — recebe eventos do iFood
 router.post('/', async (req, res) => {
   res.status(200).json({ ok: true });
   const events = Array.isArray(req.body) ? req.body : [req.body];
@@ -46,6 +46,9 @@ router.post('/', async (req, res) => {
         await pool.query(`UPDATE integrations SET orders_count=orders_count+1, last_sync_at=now(), updated_at=now() WHERE platform='ifood'`);
         console.log(`[ifood webhook] pedido ${orderId} salvo`);
 
+        // Tenta aceitar automaticamente
+        await tryAutoAccept('ifood', orderId, null);
+
       } else if (eventType === 'CONFIRMED' || eventType === 'CFM') {
         await pool.query(`UPDATE orders SET status='confirmed', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1`, [orderId]);
         console.log(`[ifood webhook] pedido ${orderId} confirmado`);
@@ -63,7 +66,6 @@ router.post('/', async (req, res) => {
   }
 });
 
-// GET /api/v1/orders/ifood/orders — lista pedidos do iFood
 router.get('/orders', async (req, res) => {
   try {
     const result = await pool.query(`SELECT id, platform, platform_order_id, app_shop_id, status, customer_name, delivery_address, items, total_price, created_at, updated_at FROM orders WHERE platform='ifood' ORDER BY created_at DESC LIMIT 50`);
@@ -71,7 +73,6 @@ router.get('/orders', async (req, res) => {
   } catch (err) { return res.status(500).json({ error: 'Erro ao buscar pedidos' }); }
 });
 
-// POST /api/v1/orders/ifood/:orderId/confirm
 router.post('/:orderId/confirm', async (req, res) => {
   const { orderId } = req.params;
   try {
@@ -85,7 +86,6 @@ router.post('/:orderId/confirm', async (req, res) => {
   }
 });
 
-// POST /api/v1/orders/ifood/:orderId/cancel
 router.post('/:orderId/cancel', async (req, res) => {
   const { orderId } = req.params;
   const { reason } = req.body;
