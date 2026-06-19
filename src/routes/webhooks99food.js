@@ -1,17 +1,19 @@
 const express = require('express');
 const pool = require('../db/postgres');
 const food99 = require('../services/food99');
+const { tryAutoAccept } = require('../services/autoAccept');
 const router = express.Router();
 
 router.post('/', async (req, res) => {
   res.status(200).json({ errno: 0, errmsg: 'ok' });
   const body = req.body;
-  console.log('[99food webhook] recebido:', JSON.stringify(body));
+  console.log('[99food webhook] recebido:', JSON.stringify(body).substring(0, 200));
   try {
     const orderId = body.order_id || body.orderId || body.data?.order_id || body.data?.order_info?.order_id;
     const appShopId = body.app_shop_id || body.appShopId;
     const orderData = body.data?.order_info || body.data || body;
     if (!orderId || !appShopId) { console.warn('[99food webhook] payload sem order_id ou app_shop_id'); return; }
+    try { await food99.getValidToken(appShopId); } catch(e) { console.warn('[99food webhook] aviso token:', e.message); }
     const order = orderData;
     await pool.query(
       `INSERT INTO orders (platform, platform_order_id, app_shop_id, status, customer_name, customer_phone, delivery_address, items, total_price, raw_payload, created_at, updated_at)
@@ -24,6 +26,10 @@ router.post('/', async (req, res) => {
     );
     await pool.query(`UPDATE integrations SET orders_count=orders_count+1, last_sync_at=now(), updated_at=now() WHERE platform='99food'`);
     console.log(`[99food webhook] pedido ${orderId} salvo`);
+
+    // Tenta aceitar automaticamente
+    await tryAutoAccept('99food', orderId, appShopId);
+
   } catch (err) { console.error('[99food webhook] erro:', err.message); }
 });
 
