@@ -1,8 +1,8 @@
 const express = require('express');
 const pool = require('../db/postgres');
+const { tryAutoAccept } = require('../services/autoAccept');
 const router = express.Router();
 
-// GET /api/v1/automations — lista todas as regras
 router.get('/', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM automation_rules ORDER BY created_at ASC');
@@ -13,7 +13,6 @@ router.get('/', async (req, res) => {
   }
 });
 
-// PUT /api/v1/automations/:id — atualizar regra (ativar/desativar, mudar delay)
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
   const { enabled, delay_seconds } = req.body;
@@ -31,8 +30,30 @@ router.put('/:id', async (req, res) => {
       values
     );
     if (result.rowCount === 0) return res.status(404).json({ error: 'Regra não encontrada' });
-    console.log(`[automations] regra ${id} atualizada: enabled=${enabled}, delay=${delay_seconds}`);
-    return res.json(result.rows[0]);
+    const rule = result.rows[0];
+    console.log(`[automations] regra ${id} atualizada: enabled=${rule.enabled}, delay=${rule.delay_seconds}`);
+
+    // Se acabou de ativar, aceitar todos os pedidos NOVOS pendentes
+    if (enabled === true && rule.action === 'auto_accept') {
+      const platforms = rule.platform === 'all'
+        ? ['ifood', '99food', 'keeta']
+        : [rule.platform];
+
+      const pendentes = await pool.query(
+        `SELECT platform, platform_order_id, app_shop_id
+         FROM orders
+         WHERE status = '100' AND platform = ANY($1)`,
+        [platforms]
+      );
+
+      console.log(`[automations] encontrou ${pendentes.rows.length} pedidos pendentes para auto-aceite`);
+
+      for (const pedido of pendentes.rows) {
+        tryAutoAccept(pedido.platform, pedido.platform_order_id, pedido.app_shop_id);
+      }
+    }
+
+    return res.json(rule);
   } catch (err) {
     console.error('[automations] erro:', err.message);
     return res.status(500).json({ error: err.message });
