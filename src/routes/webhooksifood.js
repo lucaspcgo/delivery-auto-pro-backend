@@ -9,6 +9,13 @@ router.post('/', async (req, res) => {
   const events = Array.isArray(req.body) ? req.body : [req.body];
   console.log(`[ifood webhook] recebido ${events.length} evento(s)`);
 
+  // Verifica se a integração está ativa
+  const integration = await pool.query(`SELECT status FROM integrations WHERE platform='ifood'`);
+  if (integration.rows.length > 0 && integration.rows[0].status !== 'connected') {
+    console.log('[ifood webhook] integração DESCONECTADA — ignorando eventos');
+    return;
+  }
+
   for (const event of events) {
     try {
       const orderId = event.orderId || event.id;
@@ -19,7 +26,6 @@ router.post('/', async (req, res) => {
       if (!orderId) continue;
 
       if (eventType === 'PLACED' || eventType === 'PLC') {
-        // Verifica se a loja está cadastrada
         let restaurantId = null;
         if (merchantId) {
           const loja = await pool.query(
@@ -64,7 +70,6 @@ router.post('/', async (req, res) => {
         );
         await pool.query(`UPDATE integrations SET orders_count=orders_count+1, last_sync_at=now(), updated_at=now() WHERE platform='ifood'`);
         console.log(`[ifood webhook] pedido ${orderId} salvo (loja: ${shopName || merchantId})`);
-
         await tryAutoAccept('ifood', orderId, null);
 
       } else if (eventType === 'CONFIRMED' || eventType === 'CFM') {
@@ -89,10 +94,7 @@ router.get('/orders', async (req, res) => {
     const { date } = req.query;
     let query = `SELECT id, platform, platform_order_id, app_shop_id, status, customer_name, delivery_address, items, total_price, created_at, updated_at FROM orders WHERE platform='ifood'`;
     const params = [];
-    if (date) {
-      query += ` AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = $1`;
-      params.push(date);
-    }
+    if (date) { query += ` AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = $1`; params.push(date); }
     query += ` ORDER BY created_at DESC LIMIT 100`;
     const result = await pool.query(query, params);
     return res.json(result.rows);
@@ -106,10 +108,7 @@ router.post('/:orderId/confirm', async (req, res) => {
     await pool.query(`UPDATE orders SET status='confirmed', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1`, [orderId]);
     console.log(`[ifood confirm] pedido ${orderId} confirmado`);
     return res.json({ success: true });
-  } catch (err) {
-    console.error('[ifood confirm] erro:', err.message);
-    return res.status(500).json({ error: err.message });
-  }
+  } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
 router.post('/:orderId/cancel', async (req, res) => {
@@ -120,10 +119,7 @@ router.post('/:orderId/cancel', async (req, res) => {
     await pool.query(`UPDATE orders SET status='cancelled', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1`, [orderId]);
     console.log(`[ifood cancel] pedido ${orderId} cancelado`);
     return res.json({ success: true });
-  } catch (err) {
-    console.error('[ifood cancel] erro:', err.message);
-    return res.status(500).json({ error: err.message });
-  }
+  } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
 router.post('/:orderId/ready', async (req, res) => {
@@ -132,10 +128,7 @@ router.post('/:orderId/ready', async (req, res) => {
     await pool.query(`UPDATE orders SET status='ready', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1`, [orderId]);
     console.log(`[ready] pedido ${orderId} marcado como pronto`);
     return res.json({ success: true });
-  } catch (err) {
-    console.error('[ready] erro:', err.message);
-    return res.status(500).json({ error: err.message });
-  }
+  } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
 module.exports = router;
