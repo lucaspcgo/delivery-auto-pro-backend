@@ -68,7 +68,15 @@ router.post('/', async (req, res) => {
 
 router.get('/orders', async (req, res) => {
   try {
-    const result = await pool.query(`SELECT id, platform, platform_order_id, app_shop_id, status, customer_name, delivery_address, items, total_price, created_at, updated_at FROM orders WHERE platform='ifood' ORDER BY created_at DESC LIMIT 50`);
+    const { date } = req.query;
+    let query = `SELECT id, platform, platform_order_id, app_shop_id, status, customer_name, delivery_address, items, total_price, created_at, updated_at FROM orders WHERE platform='ifood'`;
+    const params = [];
+    if (date) {
+      query += ` AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = $1`;
+      params.push(date);
+    }
+    query += ` ORDER BY created_at DESC LIMIT 100`;
+    const result = await pool.query(query, params);
     return res.json(result.rows);
   } catch (err) { return res.status(500).json({ error: 'Erro ao buscar pedidos' }); }
 });
