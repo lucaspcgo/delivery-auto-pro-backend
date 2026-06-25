@@ -26,10 +26,7 @@ router.post('/', async (req, res) => {
     );
     await pool.query(`UPDATE integrations SET orders_count=orders_count+1, last_sync_at=now(), updated_at=now() WHERE platform='99food'`);
     console.log(`[99food webhook] pedido ${orderId} salvo`);
-
-    // Tenta aceitar automaticamente
     await tryAutoAccept('99food', orderId, appShopId);
-
   } catch (err) { console.error('[99food webhook] erro:', err.message); }
 });
 
@@ -38,6 +35,16 @@ router.get('/orders', async (req, res) => {
     const result = await pool.query(`SELECT id, platform, platform_order_id, app_shop_id, status, customer_name, delivery_address, items, total_price, created_at, updated_at FROM orders WHERE platform='99food' ORDER BY created_at DESC LIMIT 50`);
     return res.json(result.rows);
   } catch (err) { return res.status(500).json({ error: 'Erro ao buscar pedidos' }); }
+});
+
+router.get('/token', async (req, res) => {
+  try {
+    const appShopId = req.query.shop || 'loja_teste_001';
+    const authToken = await food99.getValidToken(appShopId);
+    return res.json({ auth_token: authToken, app_shop_id: appShopId });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 router.post('/:orderId/confirm', async (req, res) => {
