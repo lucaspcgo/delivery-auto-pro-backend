@@ -13,8 +13,24 @@ router.post('/', async (req, res) => {
     const appShopId = body.app_shop_id || body.appShopId;
     const orderData = body.data?.order_info || body.data || body;
     if (!orderId || !appShopId) { console.warn('[99food webhook] payload sem order_id ou app_shop_id'); return; }
+
+    // Verifica se a loja está cadastrada
+    const loja = await pool.query(
+      `SELECT rp.id, rp.restaurant_id, r.name FROM restaurant_platforms rp
+       JOIN restaurants r ON r.id = rp.restaurant_id
+       WHERE rp.platform = '99food' AND rp.app_shop_id = $1 AND rp.status = 'authorized'`,
+      [appShopId]
+    );
+    if (loja.rows.length > 0) {
+      console.log(`[99food webhook] loja encontrada: ${loja.rows[0].name}`);
+    } else {
+      console.log(`[99food webhook] loja ${appShopId} NAO cadastrada — processando mesmo assim`);
+    }
+
     try { await food99.getValidToken(appShopId); } catch(e) { console.warn('[99food webhook] aviso token:', e.message); }
     const order = orderData;
+    const shopName = order.shop?.shop_name || '';
+
     await pool.query(
       `INSERT INTO orders (platform, platform_order_id, app_shop_id, status, customer_name, customer_phone, delivery_address, items, total_price, raw_payload, created_at, updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now(),now())
@@ -25,7 +41,7 @@ router.post('/', async (req, res) => {
        (order.price?.actual_amount || order.price?.order_price || 0) / 100, JSON.stringify(order)]
     );
     await pool.query(`UPDATE integrations SET orders_count=orders_count+1, last_sync_at=now(), updated_at=now() WHERE platform='99food'`);
-    console.log(`[99food webhook] pedido ${orderId} salvo`);
+    console.log(`[99food webhook] pedido ${orderId} salvo (loja: ${shopName || appShopId})`);
     await tryAutoAccept('99food', orderId, appShopId);
   } catch (err) { console.error('[99food webhook] erro:', err.message); }
 });
@@ -86,7 +102,7 @@ router.post('/:orderId/cancel', async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
-// POST /api/v1/orders/99food/:orderId/ready
+
 router.post('/:orderId/ready', async (req, res) => {
   const { orderId } = req.params;
   try {
@@ -98,4 +114,5 @@ router.post('/:orderId/ready', async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
+
 module.exports = router;
