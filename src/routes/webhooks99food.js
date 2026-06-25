@@ -8,13 +8,20 @@ router.post('/', async (req, res) => {
   res.status(200).json({ errno: 0, errmsg: 'ok' });
   const body = req.body;
   console.log('[99food webhook] recebido:', JSON.stringify(body).substring(0, 200));
+
+  // Verifica se a integração está ativa
+  const integration = await pool.query(`SELECT status FROM integrations WHERE platform='99food'`);
+  if (integration.rows.length > 0 && integration.rows[0].status !== 'connected') {
+    console.log('[99food webhook] integração DESCONECTADA — ignorando pedido');
+    return;
+  }
+
   try {
     const orderId = body.order_id || body.orderId || body.data?.order_id || body.data?.order_info?.order_id;
     const appShopId = body.app_shop_id || body.appShopId;
     const orderData = body.data?.order_info || body.data || body;
     if (!orderId || !appShopId) { console.warn('[99food webhook] payload sem order_id ou app_shop_id'); return; }
 
-    // Verifica se a loja está cadastrada
     const loja = await pool.query(
       `SELECT rp.id, rp.restaurant_id, r.name FROM restaurant_platforms rp
        JOIN restaurants r ON r.id = rp.restaurant_id
@@ -51,10 +58,7 @@ router.get('/orders', async (req, res) => {
     const { date } = req.query;
     let query = `SELECT id, platform, platform_order_id, app_shop_id, status, customer_name, delivery_address, items, total_price, created_at, updated_at FROM orders WHERE platform='99food'`;
     const params = [];
-    if (date) {
-      query += ` AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = $1`;
-      params.push(date);
-    }
+    if (date) { query += ` AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = $1`; params.push(date); }
     query += ` ORDER BY created_at DESC LIMIT 100`;
     const result = await pool.query(query, params);
     return res.json(result.rows);
@@ -66,9 +70,7 @@ router.get('/token', async (req, res) => {
     const appShopId = req.query.shop || 'loja_teste_001';
     const authToken = await food99.getValidToken(appShopId);
     return res.json({ auth_token: authToken, app_shop_id: appShopId });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
+  } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
 router.post('/:orderId/confirm', async (req, res) => {
@@ -81,10 +83,7 @@ router.post('/:orderId/confirm', async (req, res) => {
     await pool.query(`UPDATE orders SET status='confirmed', updated_at=now() WHERE platform='99food' AND platform_order_id=$1`, [orderId]);
     console.log(`[confirm] pedido ${orderId} confirmado`);
     return res.json({ success: true });
-  } catch (err) {
-    console.error('[confirm] erro:', err.message);
-    return res.status(500).json({ error: err.message });
-  }
+  } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
 router.post('/:orderId/cancel', async (req, res) => {
@@ -97,10 +96,7 @@ router.post('/:orderId/cancel', async (req, res) => {
     await pool.query(`UPDATE orders SET status='cancelled', updated_at=now() WHERE platform='99food' AND platform_order_id=$1`, [orderId]);
     console.log(`[cancel] pedido ${orderId} cancelado`);
     return res.json({ success: true });
-  } catch (err) {
-    console.error('[cancel] erro:', err.message);
-    return res.status(500).json({ error: err.message });
-  }
+  } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
 router.post('/:orderId/ready', async (req, res) => {
@@ -109,10 +105,7 @@ router.post('/:orderId/ready', async (req, res) => {
     await pool.query(`UPDATE orders SET status='ready', updated_at=now() WHERE platform='99food' AND platform_order_id=$1`, [orderId]);
     console.log(`[ready] pedido ${orderId} marcado como pronto`);
     return res.json({ success: true });
-  } catch (err) {
-    console.error('[ready] erro:', err.message);
-    return res.status(500).json({ error: err.message });
-  }
+  } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
 module.exports = router;
