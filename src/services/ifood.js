@@ -13,14 +13,14 @@ function apiRequest(method, path, body, headers) {
       hostname: BASE_HOST, path, method,
       headers: { 'Content-Type': 'application/json', ...headers }
     };
-    if (payload && !headers?.['Content-Type']?.includes('urlencoded')) {
+    if (payload) {
       options.headers['Content-Length'] = Buffer.byteLength(payload);
     }
     const req = https.request(options, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
-        try { resolve({ status: res.statusCode, data: JSON.parse(data) }); }
+        try { resolve({ status: res.statusCode, data: data ? JSON.parse(data) : null }); }
         catch (e) { resolve({ status: res.statusCode, data: data }); }
       });
     });
@@ -33,7 +33,6 @@ function apiRequest(method, path, body, headers) {
 async function getValidToken() {
   const agora = Math.floor(Date.now() / 1000);
   if (tokenCache.token && tokenCache.expiresAt > agora + 300) {
-    console.log('[ifood] usando token em cache');
     return tokenCache.token;
   }
   console.log('[ifood] buscando novo token...');
@@ -43,12 +42,31 @@ async function getValidToken() {
     'Content-Length': Buffer.byteLength(body)
   });
   if (res.status !== 200) throw new Error(`[ifood] Erro auth: ${JSON.stringify(res.data)}`);
-  tokenCache = {
-    token: res.data.accessToken,
-    expiresAt: agora + res.data.expiresIn
-  };
+  tokenCache = { token: res.data.accessToken, expiresAt: agora + res.data.expiresIn };
   console.log(`[ifood] token obtido, expira em ${res.data.expiresIn}s`);
   return tokenCache.token;
+}
+
+async function pollEvents(merchantId) {
+  const token = await getValidToken();
+  const headers = { 'Authorization': `Bearer ${token}` };
+  if (merchantId) headers['x-polling-merchants'] = merchantId;
+  const res = await apiRequest('GET', '/events/v1.0/events:polling', null, headers);
+  if (res.status === 204) return [];
+  if (res.status !== 200) {
+    console.error('[ifood] erro polling:', res.status, JSON.stringify(res.data));
+    return [];
+  }
+  return Array.isArray(res.data) ? res.data : [];
+}
+
+async function acknowledgeEvents(eventIds) {
+  if (!eventIds || eventIds.length === 0) return;
+  const token = await getValidToken();
+  await apiRequest('POST', '/events/v1.0/events/acknowledgment', eventIds.map(id => ({ id })), {
+    'Authorization': `Bearer ${token}`
+  });
+  console.log(`[ifood] ACK enviado para ${eventIds.length} evento(s)`);
 }
 
 async function getOrderDetails(orderId) {
@@ -87,4 +105,4 @@ async function dispatchOrder(orderId) {
   return res.data;
 }
 
-module.exports = { getValidToken, getOrderDetails, confirmOrder, cancelOrder, dispatchOrder };
+module.exports = { getValidToken, pollEvents, acknowledgeEvents, getOrderDetails, confirmOrder, cancelOrder, dispatchOrder };
