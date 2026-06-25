@@ -107,6 +107,9 @@ router.post('/create', optionalAuth, async (req, res) => {
     );
 
     console.log(`[checkout] fatura criada: R$ ${amount} (${plan}) para user ${userId}`);
+    // Criar dados padrão para o novo usuário
+      await pool.query('SELECT create_user_defaults($1)', [userId]);
+      console.log(`[checkout] dados padrão criados para ${email}`);
     return res.json({ type: 'payment', invoice: invoice.rows[0], amount, plan, user_id: userId });
   } catch (err) {
     console.error('[checkout] erro:', err.message);
