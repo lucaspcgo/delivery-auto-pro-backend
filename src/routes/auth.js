@@ -3,7 +3,6 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const pool = require('../db/postgres');
 const router = express.Router();
-
 const JWT_SECRET = process.env.JWT_SECRET || 'delivery-auto-pro-secret-2026';
 
 router.post('/login', async (req, res) => {
@@ -21,15 +20,19 @@ router.post('/login', async (req, res) => {
     if (!validPassword) {
       return res.status(401).json({ error: 'Email ou senha inválidos' });
     }
+    // Verificar se o pagamento está suspenso
+    if (user.payment_status === 'suspended') {
+      return res.status(403).json({ error: 'Acesso suspenso. Regularize seu pagamento.', payment_suspended: true });
+    }
     const token = jwt.sign(
-      { id: user.id, email: user.email, name: user.name, role: user.role },
+      { id: user.id, email: user.email, name: user.name, role: user.role, is_admin: user.is_admin, plan: user.plan },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
-    console.log(`[auth] login: ${user.email} (${user.role})`);
+    console.log(`[auth] login: ${user.email} (${user.role}, admin: ${user.is_admin}, plano: ${user.plan})`);
     return res.json({
       token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role }
+      user: { id: user.id, name: user.name, email: user.email, role: user.role, is_admin: user.is_admin, plan: user.plan, payment_status: user.payment_status }
     });
   } catch (err) {
     console.error('[auth] erro:', err.message);
@@ -45,9 +48,10 @@ router.get('/me', async (req, res) => {
   try {
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
-    return res.json({ user: { id: decoded.id, name: decoded.name, email: decoded.email, role: decoded.role } });
+    return res.json({ user: { id: decoded.id, name: decoded.name, email: decoded.email, role: decoded.role, is_admin: decoded.is_admin, plan: decoded.plan } });
   } catch (err) {
     return res.status(401).json({ error: 'Token inválido ou expirado' });
   }
 });
+
 module.exports = router;
