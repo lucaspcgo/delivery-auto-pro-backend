@@ -14,7 +14,6 @@ function optionalAuth(req, res, next) {
   next();
 }
 
-// GET /api/v1/checkout/plans
 router.get('/plans', async (req, res) => {
   try {
     const result = await pool.query(
@@ -25,13 +24,11 @@ router.get('/plans', async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
-// POST /api/v1/checkout/create
 router.post('/create', optionalAuth, async (req, res) => {
   const { plan, name, email, password } = req.body;
   if (!plan) return res.status(400).json({ error: 'Plano é obrigatório' });
 
   try {
-    // Busca dados do plano
     const planData = await pool.query('SELECT * FROM plans WHERE slug=$1 AND active=true', [plan]);
     if (planData.rows.length === 0) return res.status(400).json({ error: 'Plano não encontrado' });
     const selectedPlan = planData.rows[0];
@@ -45,11 +42,8 @@ router.post('/create', optionalAuth, async (req, res) => {
         return res.status(400).json({ error: 'Nome, email e senha são obrigatórios para novos usuários' });
       }
 
-      // Verificar se email já existe
       const existing = await pool.query('SELECT id, plan, plan_expires_at, payment_status FROM users WHERE email=$1', [email]);
       if (existing.rows.length > 0) {
-        const existingUser = existing.rows[0];
-        // Verificar se já usou trial gratuito
         if (selectedPlan.is_free) {
           return res.status(400).json({ error: 'Este email já foi utilizado. O período gratuito é válido apenas uma vez. Escolha um plano pago para continuar.' });
         }
@@ -59,27 +53,26 @@ router.post('/create', optionalAuth, async (req, res) => {
       const hash = await bcrypt.hash(password, 10);
 
       if (selectedPlan.is_free) {
-        // Plano gratuito: criar com trial de 7 dias
-        // Criar dados padrão para o novo usuário
-        await pool.query('SELECT create_user_defaults($1)', [u.id]);
-        console.log(`[checkout] dados padrão criados para ${email}`);
         const newUser = await pool.query(
           `INSERT INTO users (name, email, password_hash, plan, payment_status, plan_expires_at)
            VALUES ($1, $2, $3, $4, 'active', now() + INTERVAL '7 days') RETURNING *`,
           [name, email, hash, plan]
         );
         const u = newUser.rows[0];
+
+        // Criar dados padrão para o novo usuário
+        await pool.query('SELECT create_user_defaults($1)', [u.id]);
+        console.log(`[checkout] dados padrão criados para ${email}`);
+
         const token = jwt.sign(
           { id: u.id, email: u.email, name: u.name, role: u.role, is_admin: u.is_admin, plan: u.plan },
           JWT_SECRET, { expiresIn: '24h' }
         );
         console.log(`[checkout] trial gratuito criado: ${email} (expira em 7 dias)`);
         return res.json({
-          type: 'free_trial',
-          success: true,
+          type: 'free_trial', success: true,
           message: 'Conta gratuita criada! Você tem 7 dias para testar.',
-          expires_at: u.plan_expires_at,
-          token,
+          expires_at: u.plan_expires_at, token,
           user: { id: u.id, name: u.name, email: u.email, role: u.role, plan: u.plan, is_admin: u.is_admin, payment_status: 'active' }
         });
       }
@@ -90,7 +83,10 @@ router.post('/create', optionalAuth, async (req, res) => {
         [name, email, hash, plan]
       );
       userId = newUser.rows[0].id;
-      console.log(`[checkout] novo usuário criado: ${email}`);
+
+      // Criar dados padrão para o novo usuário
+      await pool.query('SELECT create_user_defaults($1)', [userId]);
+      console.log(`[checkout] dados padrão criados para ${email}`);
     }
 
     const amount = selectedPlan.price;
@@ -107,9 +103,6 @@ router.post('/create', optionalAuth, async (req, res) => {
     );
 
     console.log(`[checkout] fatura criada: R$ ${amount} (${plan}) para user ${userId}`);
-    // Criar dados padrão para o novo usuário
-      await pool.query('SELECT create_user_defaults($1)', [userId]);
-      console.log(`[checkout] dados padrão criados para ${email}`);
     return res.json({ type: 'payment', invoice: invoice.rows[0], amount, plan, user_id: userId });
   } catch (err) {
     console.error('[checkout] erro:', err.message);
@@ -117,7 +110,6 @@ router.post('/create', optionalAuth, async (req, res) => {
   }
 });
 
-// POST /api/v1/checkout/confirm
 router.post('/confirm', async (req, res) => {
   const { invoice_id, gateway_transaction_id } = req.body;
   if (!invoice_id) return res.status(400).json({ error: 'ID da fatura é obrigatório' });
@@ -134,6 +126,10 @@ router.post('/confirm', async (req, res) => {
       `UPDATE users SET plan=$1, payment_status='active', plan_expires_at=(now() + INTERVAL '30 days'), active=true, updated_at=now() WHERE id=$2`,
       [inv.plan, inv.user_id]
     );
+
+    // Criar dados padrão se não existirem
+    await pool.query('SELECT create_user_defaults($1)', [inv.user_id]);
+
     console.log(`[checkout] pagamento confirmado — fatura ${invoice_id}, user ${inv.user_id}, plano ${inv.plan}`);
     const user = await pool.query('SELECT * FROM users WHERE id=$1', [inv.user_id]);
     const u = user.rows[0];
@@ -148,7 +144,6 @@ router.post('/confirm', async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/v1/checkout/status/:invoiceId
 router.get('/status/:invoiceId', async (req, res) => {
   try {
     const result = await pool.query(
