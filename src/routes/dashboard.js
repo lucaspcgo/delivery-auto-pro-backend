@@ -2,63 +2,77 @@ const express = require('express');
 const pool = require('../db/postgres');
 const router = express.Router();
 
-// GET /api/v1/dashboard/summary
 router.get('/summary', async (req, res) => {
   try {
-    // Pedidos hoje
+    const { date, platform } = req.query;
+    const targetDate = date || new Date().toISOString().split('T')[0];
+
+    let platformFilter = '';
+    const params = [targetDate];
+    if (platform && platform !== 'all') {
+      platformFilter = ` AND platform = $2`;
+      params.push(platform);
+    }
+
     const hoje = await pool.query(
       `SELECT COUNT(*) as total,
               COALESCE(SUM(total_price), 0) as faturamento,
               COALESCE(AVG(total_price), 0) as ticket_medio
        FROM orders
-       WHERE created_at >= CURRENT_DATE`
+       WHERE DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = $1${platformFilter}`,
+      params
     );
 
-    // Pedidos ontem (para comparação)
+    const ontemParams = [targetDate];
+    if (platform && platform !== 'all') ontemParams.push(platform);
     const ontem = await pool.query(
       `SELECT COUNT(*) as total,
               COALESCE(SUM(total_price), 0) as faturamento
        FROM orders
-       WHERE created_at >= CURRENT_DATE - INTERVAL '1 day'
-         AND created_at < CURRENT_DATE`
+       WHERE DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = ($1::date - INTERVAL '1 day')::date${platformFilter}`,
+      ontemParams
     );
 
-    // Pendentes (status 100)
     const pendentes = await pool.query(
-      `SELECT COUNT(*) as total FROM orders WHERE status = '100'`
+      `SELECT COUNT(*) as total FROM orders WHERE status = '100'${platformFilter}`,
+      platform && platform !== 'all' ? [platform] : []
     );
 
-    // Cancelados hoje
+    const canceladosParams = [targetDate];
+    if (platform && platform !== 'all') canceladosParams.push(platform);
     const cancelados = await pool.query(
       `SELECT COUNT(*) as total FROM orders
-       WHERE status = 'cancelled' AND created_at >= CURRENT_DATE`
+       WHERE status = 'cancelled' AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = $1${platformFilter}`,
+      canceladosParams
     );
 
-    // Cancelados ontem
+    const canceladosOntemParams = [targetDate];
+    if (platform && platform !== 'all') canceladosOntemParams.push(platform);
     const canceladosOntem = await pool.query(
       `SELECT COUNT(*) as total FROM orders
        WHERE status = 'cancelled'
-         AND created_at >= CURRENT_DATE - INTERVAL '1 day'
-         AND created_at < CURRENT_DATE`
+         AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = ($1::date - INTERVAL '1 day')::date${platformFilter}`,
+      canceladosOntemParams
     );
 
-    // Pedidos por plataforma hoje
     const porPlataforma = await pool.query(
       `SELECT platform, COUNT(*) as total
        FROM orders
-       WHERE created_at >= CURRENT_DATE
-       GROUP BY platform`
+       WHERE DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = $1
+       GROUP BY platform`,
+      [targetDate]
     );
 
-    // Faturamento últimos 7 dias
     const ultimos7dias = await pool.query(
-      `SELECT DATE(created_at) as dia,
+      `SELECT DATE(created_at AT TIME ZONE 'America/Sao_Paulo') as dia,
               COALESCE(SUM(total_price), 0) as faturamento,
               COUNT(*) as pedidos
        FROM orders
-       WHERE created_at >= CURRENT_DATE - INTERVAL '6 days'
-       GROUP BY DATE(created_at)
-       ORDER BY dia ASC`
+       WHERE DATE(created_at AT TIME ZONE 'America/Sao_Paulo') >= ($1::date - INTERVAL '6 days')::date
+         AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') <= $1::date${platformFilter}
+       GROUP BY DATE(created_at AT TIME ZONE 'America/Sao_Paulo')
+       ORDER BY dia ASC`,
+      params
     );
 
     const hojeTotal = parseInt(hoje.rows[0].total);
@@ -73,6 +87,7 @@ router.get('/summary', async (req, res) => {
       : 0;
 
     return res.json({
+      date: targetDate,
       pedidos_hoje: hojeTotal,
       var_pedidos: varPedidos,
       pendentes: parseInt(pendentes.rows[0].total),
