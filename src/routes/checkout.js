@@ -60,6 +60,9 @@ router.post('/create', optionalAuth, async (req, res) => {
 
       if (selectedPlan.is_free) {
         // Plano gratuito: criar com trial de 7 dias
+        // Criar dados padrão para o novo usuário
+        await pool.query('SELECT create_user_defaults($1)', [u.id]);
+        console.log(`[checkout] dados padrão criados para ${email}`);
         const newUser = await pool.query(
           `INSERT INTO users (name, email, password_hash, plan, payment_status, plan_expires_at)
            VALUES ($1, $2, $3, $4, 'active', now() + INTERVAL '7 days') RETURNING *`,
