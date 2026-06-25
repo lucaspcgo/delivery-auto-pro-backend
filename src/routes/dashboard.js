@@ -1,21 +1,26 @@
 const express = require('express');
 const pool = require('../db/postgres');
+const { authenticateToken } = require('../middleware/auth');
 const router = express.Router();
+
+// Aplicar autenticação em todas as rotas
+router.use(authenticateToken);
 
 router.get('/summary', async (req, res) => {
   try {
     const { date, platform } = req.query;
     const targetDate = date || new Date().toISOString().split('T')[0];
     const hasPlatform = platform && platform !== 'all';
+    const userId = req.user.id;
 
     // Helper para montar queries com filtros opcionais
     function buildQuery(baseQuery, useDate, usePlatform) {
-      const params = [];
-      const conditions = [];
-      let idx = 1;
+      const params = [userId]; // Sempre adicionar user_id primeiro
+      const conditions = ['user_id = $1'];
+      let idx = 2;
       if (useDate) { conditions.push(`DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = $${idx++}`); params.push(targetDate); }
       if (usePlatform && hasPlatform) { conditions.push(`platform = $${idx++}`); params.push(platform); }
-      const where = conditions.length > 0 ? conditions.join(' AND ') : '1=1';
+      const where = conditions.join(' AND ');
       return { query: baseQuery.replace('__WHERE__', where), params };
     }
 
@@ -24,17 +29,17 @@ router.get('/summary', async (req, res) => {
     const hoje = await pool.query(q1.query, q1.params);
 
     // Pedidos do dia anterior
-    const ontemParams = [];
-    let ontemIdx = 1;
-    let ontemWhere = `DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = ($${ontemIdx++}::date - INTERVAL '1 day')::date`;
+    const ontemParams = [userId];
+    let ontemIdx = 2;
+    let ontemWhere = `user_id = $1 AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = ($${ontemIdx++}::date - INTERVAL '1 day')::date`;
     ontemParams.push(targetDate);
     if (hasPlatform) { ontemWhere += ` AND platform = $${ontemIdx++}`; ontemParams.push(platform); }
     const ontem = await pool.query(`SELECT COUNT(*) as total, COALESCE(SUM(total_price),0) as faturamento FROM orders WHERE ${ontemWhere}`, ontemParams);
 
     // Pendentes
-    const pendParams = [];
-    let pendIdx = 1;
-    let pendWhere = `status = '100'`;
+    const pendParams = [userId];
+    let pendIdx = 2;
+    let pendWhere = `user_id = $1 AND status = '100'`;
     if (hasPlatform) { pendWhere += ` AND platform = $${pendIdx++}`; pendParams.push(platform); }
     const pendentes = await pool.query(`SELECT COUNT(*) as total FROM orders WHERE ${pendWhere}`, pendParams);
 
@@ -43,27 +48,27 @@ router.get('/summary', async (req, res) => {
     const cancelados = await pool.query(q4.query, q4.params);
 
     // Cancelados do dia anterior
-    const cancOntemParams = [];
-    let cancOntemIdx = 1;
-    let cancOntemWhere = `status = 'cancelled' AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = ($${cancOntemIdx++}::date - INTERVAL '1 day')::date`;
+    const cancOntemParams = [userId];
+    let cancOntemIdx = 2;
+    let cancOntemWhere = `user_id = $1 AND status = 'cancelled' AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = ($${cancOntemIdx++}::date - INTERVAL '1 day')::date`;
     cancOntemParams.push(targetDate);
     if (hasPlatform) { cancOntemWhere += ` AND platform = $${cancOntemIdx++}`; cancOntemParams.push(platform); }
     const canceladosOntem = await pool.query(`SELECT COUNT(*) as total FROM orders WHERE ${cancOntemWhere}`, cancOntemParams);
 
     // Por plataforma no dia
     const porPlataforma = await pool.query(
-      `SELECT platform, COUNT(*) as total FROM orders WHERE DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = $1 GROUP BY platform`,
-      [targetDate]
+      `SELECT platform, COUNT(*) as total FROM orders WHERE user_id = $1 AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = $2 GROUP BY platform`,
+      [userId, targetDate]
     );
 
     // Últimos 7 dias
-    const u7Params = [targetDate];
-    let u7Idx = 2;
+    const u7Params = [userId, targetDate];
+    let u7Idx = 3;
     let u7Extra = '';
     if (hasPlatform) { u7Extra = ` AND platform = $${u7Idx++}`; u7Params.push(platform); }
     const ultimos7dias = await pool.query(
       `SELECT DATE(created_at AT TIME ZONE 'America/Sao_Paulo') as dia, COALESCE(SUM(total_price),0) as faturamento, COUNT(*) as pedidos
-       FROM orders WHERE DATE(created_at AT TIME ZONE 'America/Sao_Paulo') >= ($1::date - INTERVAL '6 days')::date AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') <= $1::date${u7Extra}
+       FROM orders WHERE user_id = $1 AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') >= ($2::date - INTERVAL '6 days')::date AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') <= $2::date${u7Extra}
        GROUP BY DATE(created_at AT TIME ZONE 'America/Sao_Paulo') ORDER BY dia ASC`,
       u7Params
     );

@@ -1,16 +1,21 @@
 const express = require('express');
 const pool = require('../db/postgres');
+const { authenticateToken } = require('../middleware/auth');
 const router = express.Router();
 
-// GET /api/v1/restaurants — lista todos os restaurantes
+// Aplicar autenticação em todas as rotas
+router.use(authenticateToken);
+
+// GET /api/v1/restaurants — lista restaurantes do usuário
 router.get('/', async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT r.*, 
         (SELECT json_agg(rp.*) FROM restaurant_platforms rp WHERE rp.restaurant_id = r.id) as platforms
        FROM restaurants r
-       WHERE r.active = true
-       ORDER BY r.created_at DESC`
+       WHERE r.active = true AND r.user_id = $1
+       ORDER BY r.created_at DESC`,
+      [req.user.id]
     );
     return res.json(result.rows);
   } catch (err) {
@@ -26,7 +31,8 @@ router.get('/:id', async (req, res) => {
     const result = await pool.query(
       `SELECT r.*, 
         (SELECT json_agg(rp.*) FROM restaurant_platforms rp WHERE rp.restaurant_id = r.id) as platforms
-       FROM restaurants r WHERE r.id = $1`, [id]
+       FROM restaurants r WHERE r.id = $1 AND r.user_id = $2`, 
+      [id, req.user.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Restaurante não encontrado' });
     return res.json(result.rows[0]);
@@ -41,11 +47,11 @@ router.post('/', async (req, res) => {
   if (!name) return res.status(400).json({ error: 'Nome é obrigatório' });
   try {
     const result = await pool.query(
-      `INSERT INTO restaurants (name, owner_name, phone, email, address)
-       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [name, owner_name || null, phone || null, email || null, address || null]
+      `INSERT INTO restaurants (name, owner_name, phone, email, address, user_id)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [name, owner_name || null, phone || null, email || null, address || null, req.user.id]
     );
-    console.log(`[restaurants] criado: ${name}`);
+    console.log(`[restaurants] criado: ${name} (user: ${req.user.id})`);
     return res.status(201).json(result.rows[0]);
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -57,11 +63,20 @@ router.put('/:id', async (req, res) => {
   const { id } = req.params;
   const { name, owner_name, phone, email, address } = req.body;
   try {
+    // Validar ownership
+    const check = await pool.query(
+      'SELECT id FROM restaurants WHERE id = $1 AND user_id = $2',
+      [id, req.user.id]
+    );
+    if (check.rowCount === 0) {
+      return res.status(403).json({ error: 'Acesso negado' });
+    }
+
     const result = await pool.query(
       `UPDATE restaurants SET name=COALESCE($1,name), owner_name=COALESCE($2,owner_name), 
        phone=COALESCE($3,phone), email=COALESCE($4,email), address=COALESCE($5,address), 
-       updated_at=now() WHERE id=$6 RETURNING *`,
-      [name, owner_name, phone, email, address, id]
+       updated_at=now() WHERE id=$6 AND user_id=$7 RETURNING *`,
+      [name, owner_name, phone, email, address, id, req.user.id]
     );
     if (result.rowCount === 0) return res.status(404).json({ error: 'Restaurante não encontrado' });
     return res.json(result.rows[0]);
@@ -74,7 +89,13 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    await pool.query('UPDATE restaurants SET active=false, updated_at=now() WHERE id=$1', [id]);
+    const result = await pool.query(
+      'UPDATE restaurants SET active=false, updated_at=now() WHERE id=$1 AND user_id=$2 RETURNING id',
+      [id, req.user.id]
+    );
+    if (result.rowCount === 0) {
+      return res.status(403).json({ error: 'Acesso negado' });
+    }
     return res.json({ success: true });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -87,9 +108,18 @@ router.post('/:id/platforms', async (req, res) => {
   const { platform, platform_store_id, platform_merchant_id, app_shop_id } = req.body;
   if (!platform) return res.status(400).json({ error: 'Plataforma é obrigatória' });
   try {
+    // Validar ownership
+    const check = await pool.query(
+      'SELECT id FROM restaurants WHERE id = $1 AND user_id = $2',
+      [id, req.user.id]
+    );
+    if (check.rowCount === 0) {
+      return res.status(403).json({ error: 'Acesso negado' });
+    }
+
     const result = await pool.query(
-      `INSERT INTO restaurant_platforms (restaurant_id, platform, platform_store_id, platform_merchant_id, app_shop_id, status)
-       VALUES ($1,$2,$3,$4,$5,'authorized')
+      `INSERT INTO restaurant_platforms (restaurant_id, platform, platform_store_id, platform_merchant_id, app_shop_id, status, user_id)
+       VALUES ($1,$2,$3,$4,$5,'authorized',$6)
        ON CONFLICT (restaurant_id, platform) DO UPDATE SET 
          platform_store_id=EXCLUDED.platform_store_id,
          platform_merchant_id=EXCLUDED.platform_merchant_id,
@@ -97,7 +127,7 @@ router.post('/:id/platforms', async (req, res) => {
          status='authorized',
          updated_at=now()
        RETURNING *`,
-      [id, platform, platform_store_id || null, platform_merchant_id || null, app_shop_id || null]
+      [id, platform, platform_store_id || null, platform_merchant_id || null, app_shop_id || null, req.user.id]
     );
     console.log(`[restaurants] plataforma ${platform} conectada ao restaurante ${id}`);
     return res.json(result.rows[0]);
@@ -110,6 +140,15 @@ router.post('/:id/platforms', async (req, res) => {
 router.delete('/:id/platforms/:platform', async (req, res) => {
   const { id, platform } = req.params;
   try {
+    // Validar ownership
+    const check = await pool.query(
+      'SELECT id FROM restaurants WHERE id = $1 AND user_id = $2',
+      [id, req.user.id]
+    );
+    if (check.rowCount === 0) {
+      return res.status(403).json({ error: 'Acesso negado' });
+    }
+
     await pool.query(
       `UPDATE restaurant_platforms SET status='disconnected', updated_at=now() 
        WHERE restaurant_id=$1 AND platform=$2`,
@@ -176,8 +215,8 @@ router.post('/authorize', async (req, res) => {
     const existing = await pool.query(
       `SELECT r.id, r.name FROM restaurants r
        JOIN restaurant_platforms rp ON rp.restaurant_id = r.id
-       WHERE rp.platform = $1 AND (rp.platform_merchant_id = $2 OR rp.app_shop_id = $2 OR rp.platform_store_id = $2)`,
-      [platform, platform_id]
+       WHERE rp.platform = $1 AND (rp.platform_merchant_id = $2 OR rp.app_shop_id = $2 OR rp.platform_store_id = $2) AND r.user_id = $3`,
+      [platform, platform_id, req.user.id]
     );
 
     if (existing.rows.length > 0) {
@@ -191,19 +230,19 @@ router.post('/authorize', async (req, res) => {
 
     // Cria restaurante
     const inserted = await pool.query(
-      `INSERT INTO restaurants (name, address) VALUES ($1, $2) RETURNING *`,
-      [shopName, shopAddress || null]
+      `INSERT INTO restaurants (name, address, user_id) VALUES ($1, $2, $3) RETURNING *`,
+      [shopName, shopAddress || null, req.user.id]
     );
     const restaurantId = inserted.rows[0].id;
 
     // Conecta plataforma
     await pool.query(
-      `INSERT INTO restaurant_platforms (restaurant_id, platform, platform_merchant_id, app_shop_id, platform_store_id, status)
-       VALUES ($1, $2, $3, $4, $5, 'authorized')`,
-      [restaurantId, platform, merchantId, appShopId, storeId]
+      `INSERT INTO restaurant_platforms (restaurant_id, platform, platform_merchant_id, app_shop_id, platform_store_id, status, user_id)
+       VALUES ($1, $2, $3, $4, $5, 'authorized', $6)`,
+      [restaurantId, platform, merchantId, appShopId, storeId, req.user.id]
     );
 
-    console.log(`[authorize] restaurante ${shopName} cadastrado via ${platform} (${platform_id})`);
+    console.log(`[authorize] restaurante ${shopName} cadastrado via ${platform} (${platform_id}) - user: ${req.user.id}`);
 
     return res.json({
       exists: false,

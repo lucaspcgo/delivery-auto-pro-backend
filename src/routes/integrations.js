@@ -2,9 +2,13 @@ const express = require('express');
 const pool = require('../db/postgres');
 const food99 = require('../services/food99');
 const ifood = require('../services/ifood');
+const { authenticateToken } = require('../middleware/auth');
 const router = express.Router();
 
 const PLATAFORMAS_VALIDAS = ['ifood', '99food', 'keeta'];
+
+// Aplicar autenticação em todas as rotas
+router.use(authenticateToken);
 
 router.get('/', async (req, res) => {
   try {
@@ -12,7 +16,9 @@ router.get('/', async (req, res) => {
       `SELECT id, platform, name, description, status, orders_count,
               last_sync_at, api_status, created_at, updated_at
        FROM integrations
-       ORDER BY CASE platform WHEN 'ifood' THEN 1 WHEN 'keeta' THEN 2 WHEN '99food' THEN 3 END`
+       WHERE user_id = $1
+       ORDER BY CASE platform WHEN 'ifood' THEN 1 WHEN 'keeta' THEN 2 WHEN '99food' THEN 3 END`,
+      [req.user.id]
     );
     return res.json(result.rows);
   } catch (err) {
@@ -29,15 +35,15 @@ router.post('/:platform/connect', async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE integrations SET status='connected', api_status='online', last_sync_at=now(), updated_at=now()
-       WHERE platform=$1 RETURNING *`, [platform]
+       WHERE platform=$1 AND user_id=$2 RETURNING *`, [platform, req.user.id]
     );
     if (result.rowCount === 0) return res.status(404).json({ error: 'Integração não encontrada' });
 
     // Buscar lojas da API e cadastrar automaticamente
     if (platform === 'ifood') {
-      await syncIfoodMerchants();
+      await syncIfoodMerchants(req.user.id);
     } else if (platform === '99food') {
-      await sync99foodShops();
+      await sync99foodShops(req.user.id);
     }
 
     return res.json(result.rows[0]);
@@ -55,7 +61,7 @@ router.post('/:platform/disconnect', async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE integrations SET status='disconnected', api_status='offline', updated_at=now()
-       WHERE platform=$1 RETURNING *`, [platform]
+       WHERE platform=$1 AND user_id=$2 RETURNING *`, [platform, req.user.id]
     );
     if (result.rowCount === 0) return res.status(404).json({ error: 'Integração não encontrada' });
     return res.json(result.rows[0]);
@@ -66,7 +72,7 @@ router.post('/:platform/disconnect', async (req, res) => {
 });
 
 // Busca merchants do iFood e cadastra como restaurantes
-async function syncIfoodMerchants() {
+async function syncIfoodMerchants(user_id) {
   try {
     const token = await ifood.getValidToken();
     const https = require('https');
@@ -100,15 +106,15 @@ async function syncIfoodMerchants() {
       const existing = await pool.query(
         `SELECT r.id FROM restaurants r
          JOIN restaurant_platforms rp ON rp.restaurant_id = r.id
-         WHERE rp.platform = 'ifood' AND rp.platform_merchant_id = $1`,
-        [merchantId]
+         WHERE rp.platform = 'ifood' AND rp.platform_merchant_id = $1 AND r.user_id = $2`,
+        [merchantId, user_id]
       );
 
       let restaurantId;
       if (existing.rows.length === 0) {
         const inserted = await pool.query(
-          `INSERT INTO restaurants (name, owner_name) VALUES ($1, $2) RETURNING id`,
-          [merchantName, 'Via iFood API']
+          `INSERT INTO restaurants (name, owner_name, user_id) VALUES ($1, $2, $3) RETURNING id`,
+          [merchantName, 'Via iFood API', user_id]
         );
         restaurantId = inserted.rows[0].id;
         console.log(`[sync-ifood] restaurante criado: ${merchantName} (${merchantId})`);
@@ -119,12 +125,12 @@ async function syncIfoodMerchants() {
 
       // Conecta plataforma
       await pool.query(
-        `INSERT INTO restaurant_platforms (restaurant_id, platform, platform_merchant_id, status)
-         VALUES ($1, 'ifood', $2, 'authorized')
+        `INSERT INTO restaurant_platforms (restaurant_id, platform, platform_merchant_id, status, user_id)
+         VALUES ($1, 'ifood', $2, 'authorized', $3)
          ON CONFLICT (restaurant_id, platform) DO UPDATE SET
            platform_merchant_id = EXCLUDED.platform_merchant_id,
            status = 'authorized', updated_at = now()`,
-        [restaurantId, merchantId]
+        [restaurantId, merchantId, user_id]
       );
     }
 
@@ -135,7 +141,7 @@ async function syncIfoodMerchants() {
 }
 
 // Busca lojas da 99Food cadastradas e sincroniza
-async function sync99foodShops() {
+async function sync99foodShops(user_id) {
   try {
     // A 99Food não tem endpoint para listar lojas — usamos as lojas já cadastradas no portal
     // Busca a loja de teste que já temos
@@ -145,15 +151,15 @@ async function sync99foodShops() {
     const existing = await pool.query(
       `SELECT r.id FROM restaurants r
        JOIN restaurant_platforms rp ON rp.restaurant_id = r.id
-       WHERE rp.platform = '99food' AND rp.app_shop_id = $1`,
-      [appShopId]
+       WHERE rp.platform = '99food' AND rp.app_shop_id = $1 AND r.user_id = $2`,
+      [appShopId, user_id]
     );
 
     let restaurantId;
     if (existing.rows.length === 0) {
       const inserted = await pool.query(
-        `INSERT INTO restaurants (name, owner_name) VALUES ($1, $2) RETURNING id`,
-        [shopName, 'Via 99Food API']
+        `INSERT INTO restaurants (name, owner_name, user_id) VALUES ($1, $2, $3) RETURNING id`,
+        [shopName, 'Via 99Food API', user_id]
       );
       restaurantId = inserted.rows[0].id;
       console.log(`[sync-99food] restaurante criado: ${shopName}`);
@@ -163,13 +169,13 @@ async function sync99foodShops() {
     }
 
     await pool.query(
-      `INSERT INTO restaurant_platforms (restaurant_id, platform, app_shop_id, platform_store_id, status)
-       VALUES ($1, '99food', $2, '5764616188962800939', 'authorized')
+      `INSERT INTO restaurant_platforms (restaurant_id, platform, app_shop_id, platform_store_id, status, user_id)
+       VALUES ($1, '99food', $2, '5764616188962800939', 'authorized', $3)
        ON CONFLICT (restaurant_id, platform) DO UPDATE SET
          app_shop_id = EXCLUDED.app_shop_id,
          platform_store_id = EXCLUDED.platform_store_id,
          status = 'authorized', updated_at = now()`,
-      [restaurantId, appShopId]
+      [restaurantId, appShopId, user_id]
     );
 
     console.log(`[sync-99food] loja sincronizada: ${shopName}`);
