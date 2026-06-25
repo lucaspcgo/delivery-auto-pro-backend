@@ -13,11 +13,29 @@ router.post('/', async (req, res) => {
     try {
       const orderId = event.orderId || event.id;
       const eventType = event.code || event.fullCode || event.type;
-      console.log(`[ifood webhook] evento: ${eventType}, pedido: ${orderId}`);
+      const merchantId = event.merchantId || null;
+      console.log(`[ifood webhook] evento: ${eventType}, pedido: ${orderId}, loja: ${merchantId}`);
 
       if (!orderId) continue;
 
       if (eventType === 'PLACED' || eventType === 'PLC') {
+        // Verifica se a loja está cadastrada
+        let restaurantId = null;
+        if (merchantId) {
+          const loja = await pool.query(
+            `SELECT rp.id, rp.restaurant_id, r.name FROM restaurant_platforms rp
+             JOIN restaurants r ON r.id = rp.restaurant_id
+             WHERE rp.platform = 'ifood' AND rp.platform_merchant_id = $1 AND rp.status = 'authorized'`,
+            [merchantId]
+          );
+          if (loja.rows.length > 0) {
+            restaurantId = loja.rows[0].restaurant_id;
+            console.log(`[ifood webhook] loja encontrada: ${loja.rows[0].name}`);
+          } else {
+            console.log(`[ifood webhook] loja ${merchantId} NAO cadastrada — processando mesmo assim`);
+          }
+        }
+
         const order = await ifood.getOrderDetails(orderId);
         const customerName = order.customer?.name || 'Cliente iFood';
         const customerPhone = order.customer?.phone?.number || null;
@@ -34,19 +52,19 @@ router.post('/', async (req, res) => {
           }))
         }));
         const totalPrice = order.total?.orderAmount || 0;
+        const shopName = order.merchant?.name || '';
 
         await pool.query(
           `INSERT INTO orders (platform, platform_order_id, app_shop_id, status, customer_name, customer_phone, delivery_address, items, total_price, raw_payload, created_at, updated_at)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now(),now())
            ON CONFLICT (platform, platform_order_id) DO UPDATE SET status=EXCLUDED.status, raw_payload=EXCLUDED.raw_payload, updated_at=now()`,
-          ['ifood', orderId, order.merchant?.id || null, '100',
+          ['ifood', orderId, merchantId, '100',
            customerName, customerPhone, address,
            JSON.stringify(items), totalPrice, JSON.stringify(order)]
         );
         await pool.query(`UPDATE integrations SET orders_count=orders_count+1, last_sync_at=now(), updated_at=now() WHERE platform='ifood'`);
-        console.log(`[ifood webhook] pedido ${orderId} salvo`);
+        console.log(`[ifood webhook] pedido ${orderId} salvo (loja: ${shopName || merchantId})`);
 
-        // Tenta aceitar automaticamente
         await tryAutoAccept('ifood', orderId, null);
 
       } else if (eventType === 'CONFIRMED' || eventType === 'CFM') {
@@ -108,7 +126,6 @@ router.post('/:orderId/cancel', async (req, res) => {
   }
 });
 
-// POST /api/v1/orders/ifood/:orderId/ready
 router.post('/:orderId/ready', async (req, res) => {
   const { orderId } = req.params;
   try {
@@ -120,4 +137,5 @@ router.post('/:orderId/ready', async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
+
 module.exports = router;
