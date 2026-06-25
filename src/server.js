@@ -1,4 +1,5 @@
 require('dotenv').config();
+const reportsRouter = require('./routes/reports');
 const express = require('express');
 const cors = require('cors');
 const pool = require('./db/postgres');
