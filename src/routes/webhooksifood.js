@@ -100,4 +100,16 @@ router.post('/:orderId/cancel', async (req, res) => {
   }
 });
 
+// POST /api/v1/orders/ifood/:orderId/ready
+router.post('/:orderId/ready', async (req, res) => {
+  const { orderId } = req.params;
+  try {
+    await pool.query(`UPDATE orders SET status='ready', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1`, [orderId]);
+    console.log(`[ready] pedido ${orderId} marcado como pronto`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[ready] erro:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
 module.exports = router;
