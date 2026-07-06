@@ -93,7 +93,8 @@ router.post('/ifood/authorize/start', async (req, res) => {
 // cadastra automaticamente as lojas autorizadas
 router.post('/ifood/authorize/complete', async (req, res) => {
   try {
-    await ifoodDistributed.completeAuthorization(req.user.id);
+    const { authorizationCode } = req.body;
+    await ifoodDistributed.completeAuthorization(req.user.id, authorizationCode);
     const token = await ifoodDistributed.getAccessToken(req.user.id);
     const merchants = await ifoodAPI.getMerchants(token);
 

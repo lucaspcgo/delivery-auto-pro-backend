@@ -94,26 +94,30 @@ async function startAuthorization(userId) {
 }
 
 // Passo 2: troca o código autorizado por access_token + refresh_token.
-// Só funciona DEPOIS que o dono da loja autorizou no portal.
-async function completeAuthorization(userId) {
+// O `authorizationCode` é o código que o PORTAL do iFood devolve depois que o
+// dono da loja cola o código de ativação lá — o usuário copia e cola de volta.
+async function completeAuthorization(userId, authorizationCode) {
   await ensureSchema();
+  if (!authorizationCode) {
+    throw new Error('Código de autorização não informado (copie o código que o portal do iFood devolveu).');
+  }
   const row = (await pool.query(
-    `SELECT pending_code, pending_verifier, pending_expires_at FROM ifood_auth WHERE user_id = $1`,
+    `SELECT pending_verifier, pending_expires_at FROM ifood_auth WHERE user_id = $1`,
     [String(userId)]
   )).rows[0];
 
-  if (!row || !row.pending_code) {
-    throw new Error('Nenhuma autorização pendente. Gere um novo código primeiro.');
+  if (!row || !row.pending_verifier) {
+    throw new Error('Nenhuma autorização pendente. Gere um novo código de ativação primeiro.');
   }
   if (row.pending_expires_at && new Date(row.pending_expires_at) < new Date()) {
-    throw new Error('O código de autorização expirou. Gere um novo.');
+    throw new Error('O código de ativação expirou. Gere um novo.');
   }
 
   const body = querystring.stringify({
     grantType: 'authorization_code',
     clientId: clientId(),
     clientSecret: clientSecret(),
-    authorizationCode: row.pending_code,
+    authorizationCode: authorizationCode.trim(),
     authorizationCodeVerifier: row.pending_verifier
   });
 
