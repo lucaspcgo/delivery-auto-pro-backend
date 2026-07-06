@@ -3,7 +3,7 @@ const jwt = require('jsonwebtoken');
 const pool = require('../db/postgres');
 const router = express.Router();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'delivery-auto-pro-secret-2026';
+const { JWT_SECRET } = require('../config/env');
 
 // GET /api/v1/plans — lista planos ativos (público)
 router.get('/', async (req, res) => {

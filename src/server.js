@@ -1,6 +1,9 @@
 require('dotenv').config();
+require('./config/env'); // valida JWT_SECRET na inicialização (falha rápido se ausente)
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const pool = require('./db/postgres');
 const redis = require('./db/redis');
 const integrationsRouter = require('./routes/integrations');
@@ -20,9 +23,48 @@ const menuAdminRouter = require('./routes/menuadmin');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
-app.use(express.json());
+// Atrás do proxy do EasyPanel: necessário para o rate limit identificar o IP real
+app.set('trust proxy', 1);
+
+// Headers de segurança (CSP, X-Frame-Options, etc.)
+app.use(helmet());
+
+// CORS configurável: se ALLOWED_ORIGINS estiver definido (lista separada por vírgula),
+// restringe às origens permitidas; caso contrário, mantém o comportamento aberto atual.
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',').map(o => o.trim()).filter(Boolean);
+app.use(cors(allowedOrigins.length > 0
+  ? {
+      origin(origin, cb) {
+        // Permite requests sem Origin (curl, health checks) e origens na allowlist
+        if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+        return cb(new Error('Origem não permitida pelo CORS'));
+      },
+      credentials: true
+    }
+  : undefined));
+
+// Limita o tamanho do corpo para mitigar abuso/DoS
+app.use(express.json({ limit: '1mb' }));
 app.use(express.static('public'));
+
+// Rate limit global (proteção básica contra abuso)
+app.use('/api/', rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Muitas requisições. Tente novamente em alguns minutos.' }
+}));
+
+// Rate limit estrito para autenticação (anti brute-force em login/registro/checkout)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Muitas tentativas. Aguarde alguns minutos e tente novamente.' }
+});
 
 app.get('/health', async (req, res) => {
   let dbStatus = 'erro';
@@ -42,7 +84,7 @@ app.get('/health', async (req, res) => {
   res.json({ status: 'ok', postgres: dbStatus, redis: redisStatus, timestamp: new Date().toISOString() });
 });
 
-app.use('/api/v1/auth', authRouter);
+app.use('/api/v1/auth', authLimiter, authRouter);
 app.use('/api/v1/webhooks/99food', webhooks99foodRouter);
 app.use('/api/v1/webhooks/ifood', webhooksifoodRouter);
 app.use('/api/v1/integrations', integrationsRouter);
@@ -55,7 +97,7 @@ app.use('/api/v1/reports', reportsRouter);
 app.use('/api/v1/settings', settingsRouter);
 app.use('/api/v1/admin', adminRouter);
 app.use('/api/v1/admin/menu', menuAdminRouter);
-app.use('/api/v1/checkout', checkoutRouter);
+app.use('/api/v1/checkout', authLimiter, checkoutRouter);
 app.use('/api/v1/plans', plansRouter);
 
 app.use((req, res) => { res.status(404).json({ error: 'Rota não encontrada' }); });

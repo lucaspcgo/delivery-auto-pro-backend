@@ -4,7 +4,7 @@ const bcrypt = require('bcrypt');
 const pool = require('../db/postgres');
 const router = express.Router();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'delivery-auto-pro-secret-2026';
+const { JWT_SECRET } = require('../config/env');
 
 function optionalAuth(req, res, next) {
   const authHeader = req.headers.authorization;

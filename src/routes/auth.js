@@ -3,7 +3,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const pool = require('../db/postgres');
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'delivery-auto-pro-secret-2026';
+const { JWT_SECRET } = require('../config/env');
 
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
@@ -22,7 +22,7 @@ router.post('/login', async (req, res) => {
     }
 
     if (user.plan === 'free' && user.plan_expires_at && new Date(user.plan_expires_at) < new Date()) {
-      await pool.query(`UPDATE integrations SET status='disconnected', api_status='offline', updated_at=now()`);
+      await pool.query(`UPDATE integrations SET status='disconnected', api_status='offline', updated_at=now() WHERE user_id=$1`, [user.id]);
       await pool.query(`UPDATE users SET payment_status='suspended', updated_at=now() WHERE id=$1`, [user.id]);
       return res.status(403).json({
         error: 'Seu período gratuito de 7 dias expirou. Assine um plano para continuar.',
@@ -112,7 +112,7 @@ router.get('/me', async (req, res) => {
     const u = user.rows[0];
 
     if (u.plan === 'free' && u.plan_expires_at && new Date(u.plan_expires_at) < new Date()) {
-      await pool.query(`UPDATE integrations SET status='disconnected', api_status='offline', updated_at=now()`);
+      await pool.query(`UPDATE integrations SET status='disconnected', api_status='offline', updated_at=now() WHERE user_id=$1`, [u.id]);
       await pool.query(`UPDATE users SET payment_status='suspended', updated_at=now() WHERE id=$1`, [u.id]);
       return res.status(403).json({ error: 'Período gratuito expirado', trial_expired: true, redirect: '/checkout' });
     }
