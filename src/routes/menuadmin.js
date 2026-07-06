@@ -60,19 +60,20 @@ router.post('/fetch', authenticateToken, requireAdmin, async (req, res) => {
     res.json({ platform, items, items_count: items.length });
   } catch (err) {
     console.error('[menu fetch] erro:', err.message, err.stack);
-    res.status(500).json({ error: 'Erro ao buscar cardápio', details: err.message });
-  }
-});
+  // Inserir no banco
+    const result = await pool.query(
+      `INSERT INTO menu_copies (from_restaurant_id, to_restaurant_id, from_platform, to_platform, items_copied, copied_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       RETURNING id`,
+      [from_restaurant_id, to_restaurant_id, from_platform, to_platform, JSON.stringify(selected_items || [])]
+    );
 
-// POST /api/v1/admin/menu/copy
-router.post('/copy', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const { from_restaurant_id, to_restaurant_id, from_platform, to_platform, selected_items } = req.body;
-    
-    if (!from_restaurant_id || !to_restaurant_id) {
-      return res.status(400).json({ error: 'Restaurantes de origem e destino são obrigatórios' });
-    }
-
+    res.json({ 
+      success: true, 
+      message: `${itemsCount} itens copiados com sucesso!`,
+      copied_items: itemsCount,
+      copy_id: result.rows[0]?.id
+    });
     const itemsCount = selected_items?.length || 0;
     console.log(`[menu copy] Copiando ${itemsCount} itens`);
 
