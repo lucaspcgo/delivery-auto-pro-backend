@@ -1,190 +1,175 @@
 const https = require('https');
 const querystring = require('querystring');
 
+const IFOOD_HOST = 'merchant-api.ifood.com.br';
+// Base para montar a URL das imagens a partir do imagePath retornado pelo catálogo
+const IFOOD_IMAGE_BASE = 'https://static-images.ifood.com.br/image/upload/t_high/pratos/';
+
 class iFoodAPI {
   constructor() {
     this.clientId = 'f0b06afc-d264-401f-90c4-629c40077a73';
     this.clientSecret = 'r4amkmqeif0dgrd2at3blle7ykn8qw50xnlr8p0lvjt5fcu3nfxn22tyvpqm3affmsj1ovpyxm4wq65q8vhtinpxyafa9oq1miq';
-    this.tokenCache = {};
+    this.tokenCache = { token: null, expiresAt: 0 };
   }
 
-  // Gerar token OAuth2
-  async getValidToken() {
-    try {
-      const credentials = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64');
-      
-      const token = await new Promise((resolve, reject) => {
-        const postData = querystring.stringify({ grant_type: 'client_credentials' });
-        
-        const req = https.request({
-          hostname: 'merchant-api.ifood.com.br',
-          path: '/oauth/token',
-          method: 'POST',
-          headers: {
-            'Authorization': `Basic ${credentials}`,
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Content-Length': postData.length
+  // Helper genérico de request HTTPS que checa status e faz parse do JSON
+  _request({ path, method = 'GET', headers = {}, body = null }) {
+    return new Promise((resolve, reject) => {
+      const req = https.request({ hostname: IFOOD_HOST, path, method, headers }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            return reject(new Error(`iFood ${method} ${path} -> HTTP ${res.statusCode}: ${data.slice(0, 500)}`));
           }
-        }, (res) => {
-          let data = '';
-          res.on('data', chunk => data += chunk);
-          res.on('end', () => {
-            try {
-              const parsed = JSON.parse(data);
-              resolve(parsed.access_token);
-            } catch (err) {
-              reject(new Error('Falha ao fazer parse do token'));
-            }
-          });
+          if (!data) return resolve(null);
+          try {
+            resolve(JSON.parse(data));
+          } catch (err) {
+            reject(new Error(`Falha ao fazer parse da resposta iFood (${path}): ${data.slice(0, 300)}`));
+          }
         });
-        
-        req.on('error', reject);
-        req.write(postData);
-        req.end();
       });
+      req.on('error', reject);
+      if (body) req.write(body);
+      req.end();
+    });
+  }
 
-      return token;
-    } catch (err) {
-      console.error('[ifood-api] erro ao gerar token:', err.message);
-      throw err;
+  // Gerar (e cachear) token OAuth2 — endpoint/formato corretos da Merchant API
+  async getValidToken() {
+    // Reaproveita token em cache se ainda válido (margem de 60s)
+    if (this.tokenCache.token && Date.now() < this.tokenCache.expiresAt - 60000) {
+      return this.tokenCache.token;
     }
+
+    const postData = querystring.stringify({
+      grantType: 'client_credentials',
+      clientId: this.clientId,
+      clientSecret: this.clientSecret
+    });
+
+    const parsed = await this._request({
+      path: '/authentication/v1.0/oauth/token',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(postData)
+      },
+      body: postData
+    });
+
+    if (!parsed || !parsed.accessToken) {
+      throw new Error(`iFood não retornou accessToken: ${JSON.stringify(parsed)}`);
+    }
+
+    const expiresInMs = (parsed.expiresIn || 3600) * 1000;
+    this.tokenCache = { token: parsed.accessToken, expiresAt: Date.now() + expiresInMs };
+    return parsed.accessToken;
   }
 
   // Buscar merchants (lojas do usuário)
   async getMerchants(token) {
-    try {
-      const merchants = await new Promise((resolve, reject) => {
-        const req = https.request({
-          hostname: 'merchant-api.ifood.com.br',
-          path: '/merchant/v1.0/merchants',
-          method: 'GET',
-          headers: { 'Authorization': `Bearer ${token}` }
-        }, (res) => {
-          let data = '';
-          res.on('data', chunk => data += chunk);
-          res.on('end', () => {
-            try {
-              const parsed = JSON.parse(data);
-              resolve(Array.isArray(parsed) ? parsed : []);
-            } catch (err) {
-              resolve([]);
-            }
-          });
-        });
-        req.on('error', reject);
-        req.end();
-      });
-
-      return merchants;
-    } catch (err) {
-      console.error('[ifood-api] erro ao buscar merchants:', err.message);
-      return [];
-    }
+    const merchants = await this._request({
+      path: '/merchant/v1.0/merchants?page=1&size=100',
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    return Array.isArray(merchants) ? merchants : [];
   }
 
-  // Buscar menu completo
-  async getMenuFull(merchantId, token) {
-    try {
-      const menu = await new Promise((resolve, reject) => {
-        const req = https.request({
-          hostname: 'merchant-api.ifood.com.br',
-          path: `/catalog/v2.0/merchants/${merchantId}/menu`,
-          method: 'GET',
-          headers: { 'Authorization': `Bearer ${token}` }
-        }, (res) => {
-          let data = '';
-          res.on('data', chunk => data += chunk);
-          res.on('end', () => {
-            try {
-              const parsed = JSON.parse(data);
-              resolve(parsed);
-            } catch (err) {
-              reject(err);
-            }
-          });
-        });
-        req.on('error', reject);
-        req.end();
-      });
-
-      return menu;
-    } catch (err) {
-      console.error('[ifood-api] erro ao buscar menu:', err.message);
-      throw err;
-    }
+  // Listar catálogos de um merchant
+  async getCatalogs(merchantId, token) {
+    const catalogs = await this._request({
+      path: `/catalog/v2.0/merchants/${merchantId}/catalogs`,
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    return Array.isArray(catalogs) ? catalogs : [];
   }
 
-  // Processar menu e extrair items com imagens
+  // Buscar categorias (com itens) de um catálogo específico
+  async getCategories(merchantId, catalogId, token) {
+    const categories = await this._request({
+      path: `/catalog/v2.0/merchants/${merchantId}/catalogs/${catalogId}/categories?includeItems=true`,
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    return Array.isArray(categories) ? categories : [];
+  }
+
+  // Monta URL completa da imagem a partir do imagePath do catálogo
+  _buildImageUrl(item) {
+    const p = item.imagePath || item.image?.path || item.image?.url || null;
+    if (!p) return null;
+    if (/^https?:\/\//.test(p)) return p; // já é URL completa
+    return IFOOD_IMAGE_BASE + p.replace(/^\/+/, '');
+  }
+
+  // Extrai o preço lidando com os formatos possíveis do catálogo v2.0
+  _extractPrice(item) {
+    const price = item.price;
+    if (price && typeof price === 'object') {
+      return price.value ?? price.originalValue ?? 0; // v2.0: já vem em reais
+    }
+    if (typeof price === 'number') return price; // fallback
+    return 0;
+  }
+
+  // Buscar e achatar todos os items do cardápio (fluxo correto: catalogs -> categories -> items)
   async getMenuItems(merchantId, token) {
-    try {
-      const menu = await this.getMenuFull(merchantId, token);
-      const items = [];
+    const catalogs = await this.getCatalogs(merchantId, token);
+    console.log(`[ifood-api] merchant ${merchantId}: ${catalogs.length} catálogo(s)`);
 
-      if (menu.sections && Array.isArray(menu.sections)) {
-        for (const section of menu.sections) {
-          if (section.items && Array.isArray(section.items)) {
-            for (const item of section.items) {
-              items.push({
-                id: item.id,
-                name: item.name,
-                description: item.description || '',
-                price: (item.price || 0) / 100, // iFood retorna em centavos
-                category: section.name,
-                image: item.image?.url || null, // URL da imagem
-                available: item.available !== false,
-                sku: item.sku || null,
-                productId: item.productId || item.id
-              });
-            }
+    const items = [];
+    let rawLogged = false;
+
+    for (const catalog of catalogs) {
+      const catalogId = catalog.catalogId || catalog.id;
+      if (!catalogId) continue;
+
+      const categories = await this.getCategories(merchantId, catalogId, token);
+      console.log(`[ifood-api] catálogo ${catalogId}: ${categories.length} categoria(s)`);
+
+      for (const category of categories) {
+        const catItems = Array.isArray(category.items) ? category.items : [];
+        for (const item of catItems) {
+          if (!rawLogged) {
+            // Loga o primeiro item cru uma vez para calibrar o parsing com dados reais
+            console.log('[ifood-api] exemplo de item cru:', JSON.stringify(item).slice(0, 600));
+            rawLogged = true;
           }
+          items.push({
+            id: item.id,
+            name: item.name,
+            description: item.description || '',
+            price: this._extractPrice(item),
+            category: category.name,
+            image: this._buildImageUrl(item),
+            available: (item.status || '').toUpperCase() !== 'UNAVAILABLE' && item.available !== false,
+            sku: item.sku || item.externalCode || null,
+            productId: item.productId || item.id
+          });
         }
       }
-
-      return items;
-    } catch (err) {
-      console.error('[ifood-api] erro ao processar items:', err.message);
-      throw err;
     }
+
+    return items;
   }
 
-  // Buscar detalhes de um produto
+  // Buscar detalhes de um produto específico
   async getItemDetails(merchantId, itemId, token) {
-    try {
-      const details = await new Promise((resolve, reject) => {
-        const req = https.request({
-          hostname: 'merchant-api.ifood.com.br',
-          path: `/catalog/v2.0/merchants/${merchantId}/items/${itemId}`,
-          method: 'GET',
-          headers: { 'Authorization': `Bearer ${token}` }
-        }, (res) => {
-          let data = '';
-          res.on('data', chunk => data += chunk);
-          res.on('end', () => {
-            try {
-              const parsed = JSON.parse(data);
-              resolve(parsed);
-            } catch (err) {
-              reject(err);
-            }
-          });
-        });
-        req.on('error', reject);
-        req.end();
-      });
-
-      return {
-        id: details.id,
-        name: details.name,
-        description: details.description,
-        price: (details.price || 0) / 100,
-        image: details.image?.url,
-        available: details.available,
-        ingredients: details.ingredients || []
-      };
-    } catch (err) {
-      console.error('[ifood-api] erro ao buscar detalhes:', err.message);
-      throw err;
-    }
+    const details = await this._request({
+      path: `/catalog/v2.0/merchants/${merchantId}/items/${itemId}`,
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (!details) return null;
+    return {
+      id: details.id,
+      name: details.name,
+      description: details.description,
+      price: this._extractPrice(details),
+      image: this._buildImageUrl(details),
+      available: details.available,
+      ingredients: details.ingredients || []
+    };
   }
 }
 
