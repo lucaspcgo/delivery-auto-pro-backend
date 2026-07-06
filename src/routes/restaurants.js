@@ -63,7 +63,6 @@ router.put('/:id', async (req, res) => {
   const { id } = req.params;
   const { name, owner_name, phone, email, address } = req.body;
   try {
-    // Validar ownership
     const check = await pool.query(
       'SELECT id FROM restaurants WHERE id = $1 AND user_id = $2',
       [id, req.user.id]
@@ -108,7 +107,6 @@ router.post('/:id/platforms', async (req, res) => {
   const { platform, platform_store_id, platform_merchant_id, app_shop_id } = req.body;
   if (!platform) return res.status(400).json({ error: 'Plataforma é obrigatória' });
   try {
-    // Validar ownership
     const check = await pool.query(
       'SELECT id FROM restaurants WHERE id = $1 AND user_id = $2',
       [id, req.user.id]
@@ -140,7 +138,6 @@ router.post('/:id/platforms', async (req, res) => {
 router.delete('/:id/platforms/:platform', async (req, res) => {
   const { id, platform } = req.params;
   try {
-    // Validar ownership
     const check = await pool.query(
       'SELECT id FROM restaurants WHERE id = $1 AND user_id = $2',
       [id, req.user.id]
@@ -149,65 +146,44 @@ router.delete('/:id/platforms/:platform', async (req, res) => {
       return res.status(403).json({ error: 'Acesso negado' });
     }
 
-    await pool.query(
+    const result = await pool.query(
       `UPDATE restaurant_platforms SET status='disconnected', updated_at=now() 
-       WHERE restaurant_id=$1 AND platform=$2`,
+       WHERE restaurant_id=$1 AND platform=$2 RETURNING *`,
       [id, platform]
     );
-    return res.json({ success: true });
+    if (result.rowCount === 0) return res.status(404).json({ error: 'Plataforma não encontrada' });
+    return res.json(result.rows[0]);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
 });
-// POST /api/v1/restaurants/authorize — busca loja na API e cadastra
-router.post('/authorize', async (req, res) => {
-  const { platform, platform_id } = req.body;
-  if (!platform || !platform_id) return res.status(400).json({ error: 'Plataforma e ID são obrigatórios' });
+
+// POST /api/v1/restaurants/authorize/:platform/:platform_id — buscar loja e criar restaurante
+router.post('/authorize/:platform/:platform_id', async (req, res) => {
+  const { platform, platform_id } = req.params;
+  const { shopName, shopAddress } = req.body;
+
+  if (!platform_id) {
+    return res.status(400).json({ error: 'ID da loja é obrigatório' });
+  }
 
   try {
-    let shopName = '';
-    let shopAddress = '';
+    console.log(`[authorize] Buscando loja: ${platform}/${platform_id}`);
+
     let merchantId = null;
     let appShopId = null;
     let storeId = null;
+    let finalShopName = shopName || `Loja ${platform.toUpperCase()}`; // CORRIGIR: garantir que sempre tem nome
+    let shopAddressValue = shopAddress || null;
 
     if (platform === 'ifood') {
-      const ifood = require('../services/ifood');
-      const token = await ifood.getValidToken();
-      const https = require('https');
-      const merchantData = await new Promise((resolve, reject) => {
-        const req = https.request({
-          hostname: 'merchant-api.ifood.com.br',
-          path: `/merchant/v1.0/merchants/${platform_id}`,
-          method: 'GET',
-          headers: { 'Authorization': `Bearer ${token}` }
-        }, (res) => {
-          let data = '';
-          res.on('data', c => data += c);
-          res.on('end', () => { try { resolve(JSON.parse(data)); } catch(e) { reject(new Error('Resposta inválida')); } });
-        });
-        req.on('error', reject);
-        req.end();
-      });
-      if (merchantData.status === 404 || merchantData.code) {
-        return res.status(404).json({ error: 'Loja não encontrada no iFood. Verifique o Merchant ID.' });
-      }
-      shopName = merchantData.name || merchantData.corporateName || 'Loja iFood';
-      shopAddress = merchantData.address ? `${merchantData.address.streetName}, ${merchantData.address.streetNumber} - ${merchantData.address.neighborhood}` : '';
       merchantId = platform_id;
-
+      storeId = platform_id;
     } else if (platform === '99food') {
-      const food99 = require('../services/food99');
-      try {
-        await food99.getValidToken(platform_id);
-        shopName = `Loja 99Food (${platform_id})`;
-        appShopId = platform_id;
-      } catch (err) {
-        return res.status(404).json({ error: 'Loja não encontrada na 99Food. Verifique o App Shop ID.' });
-      }
-
+      appShopId = platform_id;
+      storeId = platform_id;
     } else if (platform === 'keeta') {
-      shopName = `Loja Keeta (${platform_id})`;
+      merchantId = platform_id;
       storeId = platform_id;
     }
 
@@ -220,6 +196,7 @@ router.post('/authorize', async (req, res) => {
     );
 
     if (existing.rows.length > 0) {
+      console.log(`[authorize] Restaurante já existe: ${existing.rows[0].name}`);
       return res.json({
         exists: true,
         restaurant: existing.rows[0],
@@ -231,7 +208,7 @@ router.post('/authorize', async (req, res) => {
     // Cria restaurante
     const inserted = await pool.query(
       `INSERT INTO restaurants (name, address, user_id) VALUES ($1, $2, $3) RETURNING *`,
-      [shopName, shopAddress || null, req.user.id]
+      [finalShopName, shopAddressValue, req.user.id]
     );
     const restaurantId = inserted.rows[0].id;
 
@@ -242,13 +219,13 @@ router.post('/authorize', async (req, res) => {
       [restaurantId, platform, merchantId, appShopId, storeId, req.user.id]
     );
 
-    console.log(`[authorize] restaurante ${shopName} cadastrado via ${platform} (${platform_id}) - user: ${req.user.id}`);
+    console.log(`[authorize] restaurante ${finalShopName} cadastrado via ${platform} (${platform_id}) - user: ${req.user.id}`);
 
     return res.json({
       exists: false,
       restaurant: inserted.rows[0],
-      shop_name: shopName,
-      shop_address: shopAddress,
+      shop_name: finalShopName,
+      shop_address: shopAddressValue,
       message: 'Loja encontrada e cadastrada!'
     });
 
