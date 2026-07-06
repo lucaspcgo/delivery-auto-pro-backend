@@ -151,6 +151,54 @@ router.get('/ifood/authorize/status', async (req, res) => {
   }
 });
 
+// ===== Conectar loja 99Food pelo Shop ID =====
+router.post('/99food/connect-shop', async (req, res) => {
+  const { app_shop_id, name } = req.body;
+  if (!app_shop_id) {
+    return res.status(400).json({ error: 'Shop ID (app_shop_id) é obrigatório' });
+  }
+  try {
+    // Valida que o app tem acesso a essa loja (gera token). Se falhar, a loja
+    // não está vinculada ao app no 99Food.
+    await food99.getValidToken(String(app_shop_id));
+
+    const shopName = name || `Loja 99Food ${app_shop_id}`;
+
+    // Cria/reaproveita o restaurante desta loja para o usuário
+    const existing = await pool.query(
+      `SELECT r.id FROM restaurants r
+       JOIN restaurant_platforms rp ON rp.restaurant_id = r.id
+       WHERE rp.platform = '99food' AND rp.app_shop_id = $1 AND r.user_id = $2`,
+      [String(app_shop_id), req.user.id]
+    );
+
+    let restaurantId;
+    if (existing.rows.length === 0) {
+      const inserted = await pool.query(
+        `INSERT INTO restaurants (name, owner_name, user_id) VALUES ($1, $2, $3) RETURNING id`,
+        [shopName, 'Via 99Food', req.user.id]
+      );
+      restaurantId = inserted.rows[0].id;
+    } else {
+      restaurantId = existing.rows[0].id;
+    }
+
+    await pool.query(
+      `INSERT INTO restaurant_platforms (restaurant_id, platform, app_shop_id, status, user_id)
+       VALUES ($1, '99food', $2, 'authorized', $3)
+       ON CONFLICT (restaurant_id, platform) DO UPDATE SET
+         app_shop_id = EXCLUDED.app_shop_id, status = 'authorized', updated_at = now()`,
+      [restaurantId, String(app_shop_id), req.user.id]
+    );
+
+    console.log(`[99food connect] user ${req.user.id} conectou loja ${app_shop_id} (${shopName})`);
+    return res.json({ success: true, restaurant_id: restaurantId, app_shop_id: String(app_shop_id), name: shopName });
+  } catch (err) {
+    console.error('[99food connect] erro:', err.message);
+    return res.status(400).json({ error: 'Não foi possível conectar a loja 99Food', details: err.message });
+  }
+});
+
 // Busca merchants do iFood e cadastra como restaurantes
 async function syncIfoodMerchants(user_id) {
   try {
