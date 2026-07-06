@@ -7,8 +7,8 @@ const IFOOD_IMAGE_BASE = 'https://static-images.ifood.com.br/image/upload/t_high
 
 class iFoodAPI {
   constructor() {
-    this.clientId = 'f0b06afc-d264-401f-90c4-629c40077a73';
-    this.clientSecret = 'r4amkmqeif0dgrd2at3blle7ykn8qw50xnlr8p0lvjt5fcu3nfxn22tyvpqm3affmsj1ovpyxm4wq65q8vhtinpxyafa9oq1miq';
+    this.clientId = process.env.IFOOD_CLIENT_ID;
+    this.clientSecret = process.env.IFOOD_CLIENT_SECRET;
     this.tokenCache = { token: null, expiresAt: 0 };
   }
 
@@ -38,6 +38,10 @@ class iFoodAPI {
 
   // Gerar (e cachear) token OAuth2 — endpoint/formato corretos da Merchant API
   async getValidToken() {
+    if (!this.clientId || !this.clientSecret) {
+      throw new Error('Credenciais do iFood não configuradas. Defina IFOOD_CLIENT_ID e IFOOD_CLIENT_SECRET nas variáveis de ambiente.');
+    }
+
     // Reaproveita token em cache se ainda válido (margem de 60s)
     if (this.tokenCache.token && Date.now() < this.tokenCache.expiresAt - 60000) {
       return this.tokenCache.token;
