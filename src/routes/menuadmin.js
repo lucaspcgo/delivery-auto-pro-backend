@@ -34,9 +34,9 @@ router.post('/fetch', authenticateToken, requireAdmin, async (req, res) => {
 
     console.log(`[menu fetch] Buscando cardápio: restaurante=${restaurant_id}, plataforma=${platform}`);
 
-    // Buscar dados de acesso da plataforma
+    // Buscar dados de acesso da plataforma (apenas platform_store_id)
     const platData = await pool.query(
-      `SELECT rp.platform_store_id, rp.access_token
+      `SELECT rp.platform_store_id, rp.platform
        FROM restaurant_platforms rp
        WHERE rp.restaurant_id = $1 AND rp.platform = $2`,
       [restaurant_id, platform]
@@ -44,15 +44,16 @@ router.post('/fetch', authenticateToken, requireAdmin, async (req, res) => {
 
     if (platData.rows.length === 0) {
       console.log('[menu fetch] Plataforma não configurada');
-      return res.status(404).json({ error: 'Plataforma não configurada para este restaurante' });
+      return res.json({ platform, items: [], items_count: 0, message: 'Nenhuma integração configurada' });
     }
 
-    const { platform_store_id, access_token } = platData.rows[0];
+    const { platform_store_id } = platData.rows[0];
     
-    // Por enquanto, retornar items vazios (será implementado depois)
+    // Retornar items de exemplo por enquanto
     const items = [
       { id: '1', name: 'Exemplo Prato 1', price: 25.90, category: 'Principal', available: true },
-      { id: '2', name: 'Exemplo Prato 2', price: 15.50, category: 'Acompanhamento', available: true }
+      { id: '2', name: 'Exemplo Prato 2', price: 15.50, category: 'Acompanhamento', available: true },
+      { id: '3', name: 'Exemplo Prato 3', price: 35.00, category: 'Principal', available: true }
     ];
 
     console.log(`[menu fetch] Retornando ${items.length} itens`);
@@ -72,12 +73,13 @@ router.post('/copy', authenticateToken, requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Restaurantes de origem e destino são obrigatórios' });
     }
 
-    console.log(`[menu copy] Copiando ${selected_items?.length || 0} itens`);
+    const itemsCount = selected_items?.length || 0;
+    console.log(`[menu copy] Copiando ${itemsCount} itens`);
 
     res.json({ 
       success: true, 
-      message: `${selected_items?.length || 0} itens copiados com sucesso!`,
-      copied_items: selected_items?.length || 0 
+      message: `${itemsCount} itens copiados com sucesso!`,
+      copied_items: itemsCount
     });
   } catch (err) {
     console.error('[menu copy] erro:', err.message);
