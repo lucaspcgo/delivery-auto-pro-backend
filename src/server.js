@@ -102,4 +102,12 @@ app.use('/api/v1/plans', plansRouter);
 
 app.use((req, res) => { res.status(404).json({ error: 'Rota não encontrada' }); });
 
-app.listen(PORT, () => { console.log(`Delivery Auto Pro backend rodando na porta ${PORT}`); });
+app.listen(PORT, () => {
+  console.log(`Delivery Auto Pro backend rodando na porta ${PORT}`);
+  // Inicia o polling de pedidos do iFood (modelo distribuído, sem webhook)
+  try {
+    require('./services/ifood-poller').startPolling();
+  } catch (err) {
+    console.error('[server] falha ao iniciar polling do iFood:', err.message);
+  }
+});

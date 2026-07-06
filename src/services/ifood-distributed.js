@@ -235,11 +235,36 @@ async function isAuthorized(userId) {
   return !!(row && row.refresh_token);
 }
 
+// Lista os user_ids que já autorizaram alguma loja iFood (para o polling)
+async function listAuthorizedUsers() {
+  await ensureSchema();
+  const rows = (await pool.query(
+    `SELECT user_id FROM ifood_auth WHERE refresh_token IS NOT NULL`
+  )).rows;
+  return rows.map(r => r.user_id);
+}
+
+// Busca eventos de pedido pendentes (polling). Retorna [] se não houver (HTTP 204).
+async function pollEvents(token) {
+  const data = await orderRequest(token, 'GET', '/events/v1.0/events:polling', null);
+  return Array.isArray(data) ? data : [];
+}
+
+// Confirma o recebimento dos eventos para o iFood não reenviar
+async function acknowledgeEvents(token, eventIds) {
+  if (!eventIds || eventIds.length === 0) return;
+  await orderRequest(token, 'POST', '/events/v1.0/events/acknowledgment',
+    eventIds.map(id => ({ id })));
+}
+
 module.exports = {
   startAuthorization,
   completeAuthorization,
   getAccessToken,
   isAuthorized,
+  listAuthorizedUsers,
+  pollEvents,
+  acknowledgeEvents,
   getOrderDetails,
   confirmOrder,
   readyToPickup,
