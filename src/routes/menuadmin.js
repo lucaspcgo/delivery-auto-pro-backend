@@ -34,7 +34,7 @@ router.post('/fetch', authenticateToken, requireAdmin, async (req, res) => {
 
     console.log(`[menu fetch] Buscando cardápio: restaurante=${restaurant_id}, plataforma=${platform}`);
 
-    // Buscar dados de acesso da plataforma (apenas platform_store_id)
+    // Buscar dados de acesso da plataforma
     const platData = await pool.query(
       `SELECT rp.platform_store_id, rp.platform
        FROM restaurant_platforms rp
@@ -47,8 +47,6 @@ router.post('/fetch', authenticateToken, requireAdmin, async (req, res) => {
       return res.json({ platform, items: [], items_count: 0, message: 'Nenhuma integração configurada' });
     }
 
-    const { platform_store_id } = platData.rows[0];
-    
     // Retornar items de exemplo por enquanto
     const items = [
       { id: '1', name: 'Exemplo Prato 1', price: 25.90, category: 'Principal', available: true },
@@ -60,27 +58,37 @@ router.post('/fetch', authenticateToken, requireAdmin, async (req, res) => {
     res.json({ platform, items, items_count: items.length });
   } catch (err) {
     console.error('[menu fetch] erro:', err.message, err.stack);
-  // Inserir no banco
+    res.status(500).json({ error: 'Erro ao buscar cardápio', details: err.message });
+  }
+});
+
+// POST /api/v1/admin/menu/copy
+router.post('/copy', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { from_restaurant_id, to_restaurant_id, from_platform, to_platform, selected_items } = req.body;
+    
+    if (!from_restaurant_id || !to_restaurant_id) {
+      return res.status(400).json({ error: 'Restaurantes de origem e destino são obrigatórios' });
+    }
+
+    const itemsCount = selected_items?.length || 0;
+    console.log(`[menu copy] Copiando ${itemsCount} itens`);
+
+    // Inserir no banco
     const result = await pool.query(
       `INSERT INTO menu_copies (from_restaurant_id, to_restaurant_id, from_platform, to_platform, items_copied, copied_at)
        VALUES ($1, $2, $3, $4, $5, NOW())
        RETURNING id`,
-      [from_restaurant_id, to_restaurant_id, from_platform, to_platform, JSON.stringify(selected_items || [])]
+      [from_restaurant_id, to_restaurant_id, from_platform || '', to_platform || '', JSON.stringify(selected_items || [])]
     );
+
+    console.log(`[menu copy] Cópia registrada com ID: ${result.rows[0]?.id}`);
 
     res.json({ 
       success: true, 
       message: `${itemsCount} itens copiados com sucesso!`,
       copied_items: itemsCount,
       copy_id: result.rows[0]?.id
-    });
-    const itemsCount = selected_items?.length || 0;
-    console.log(`[menu copy] Copiando ${itemsCount} itens`);
-
-    res.json({ 
-      success: true, 
-      message: `${itemsCount} itens copiados com sucesso!`,
-      copied_items: itemsCount
     });
   } catch (err) {
     console.error('[menu copy] erro:', err.message);
