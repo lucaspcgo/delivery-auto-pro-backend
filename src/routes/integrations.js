@@ -151,6 +151,12 @@ router.get('/ifood/authorize/status', async (req, res) => {
   }
 });
 
+// Retorna a URL de autorização do app 99Food (para o botão "Autorizar")
+router.get('/99food/authorize-url', (req, res) => {
+  const url = process.env.FOOD99_AUTHORIZE_URL || null;
+  return res.json({ url });
+});
+
 // ===== Conectar loja 99Food pelo Shop ID =====
 router.post('/99food/connect-shop', async (req, res) => {
   const { app_shop_id, name } = req.body;
