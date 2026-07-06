@@ -3,7 +3,6 @@ const express = require('express');
 const cors = require('cors');
 const pool = require('./db/postgres');
 const redis = require('./db/redis');
-
 const integrationsRouter = require('./routes/integrations');
 const webhooks99foodRouter = require('./routes/webhooks99food');
 const webhooksifoodRouter = require('./routes/webhooksifood');
@@ -16,6 +15,7 @@ const settingsRouter = require('./routes/settings');
 const adminRouter = require('./routes/admin');
 const checkoutRouter = require('./routes/checkout');
 const plansRouter = require('./routes/plans');
+const menuAdminRouter = require('./routes/menuadmin');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -54,6 +54,7 @@ app.use('/api/v1/restaurants', restaurantsRouter);
 app.use('/api/v1/reports', reportsRouter);
 app.use('/api/v1/settings', settingsRouter);
 app.use('/api/v1/admin', adminRouter);
+app.use('/api/v1/admin/menu', menuAdminRouter);
 app.use('/api/v1/checkout', checkoutRouter);
 app.use('/api/v1/plans', plansRouter);
 
