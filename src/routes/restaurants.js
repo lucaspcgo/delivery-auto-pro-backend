@@ -2,7 +2,34 @@ const express = require('express');
 const pool = require('../db/postgres');
 const { authenticateToken } = require('../middleware/auth');
 const router = express.Router();
+// DEBUG: teste (SEM autenticação para debug)
+router.post('/test-ifood/:merchant_id', async (req, res) => {
+  const { merchant_id } = req.params;
+  try {
+    const ifood = require('../services/ifood');
+    const token = await ifood.getValidToken();
+    const https = require('https');
+    const merchantData = await new Promise((resolve, reject) => {
+      const req = https.request({
+        hostname: 'merchant-api.ifood.com.br',
+        path: `/merchant/v1.0/merchants/${merchant_id}`,
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}` }
+      }, (res) => {
+        let data = '';
+        res.on('data', c => data += c);
+        res.on('end', () => resolve(JSON.parse(data)));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    res.json({ merchant_id, response: merchantData });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
+router.use(authenticateToken);
 router.use(authenticateToken);
 
 // POST /api/v1/restaurants/authorize — PRIMEIRO (antes de /:id para não conflitar)
