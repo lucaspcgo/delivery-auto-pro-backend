@@ -2,6 +2,7 @@ const express = require('express');
 const pool = require('../db/postgres');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const ifoodAPI = require('../services/ifood-api-complete');
+const ifoodDistributed = require('../services/ifood-distributed');
 const router = express.Router();
 
 // GET /api/v1/admin/menu/restaurants
@@ -51,29 +52,13 @@ router.post('/fetch', authenticateToken, requireAdmin, async (req, res) => {
     const { platform_merchant_id, platform_store_id } = platData.rows[0];
     let items = [];
 
-    // Buscar via API REAL do iFood
+    // Buscar via API REAL do iFood (usando o token da loja autorizada — modelo distribuído)
     if (platform === 'ifood') {
       try {
-        const token = await ifoodAPI.getValidToken();
-        let merchantId = platform_merchant_id || platform_store_id;
+        const token = await ifoodDistributed.getAccessToken(req.user.id);
+        const merchantId = platform_merchant_id || platform_store_id;
         console.log(`[menu fetch] usando merchantId=${merchantId}`);
-
-        try {
-          items = await ifoodAPI.getMenuItems(merchantId, token);
-        } catch (innerErr) {
-          // merchantId salvo pode estar incorreto (ex: ID interno em vez do merchant do iFood).
-          // Se as credenciais enxergam apenas uma loja, tenta resolver automaticamente.
-          console.warn(`[menu fetch] falha com merchantId=${merchantId}: ${innerErr.message}`);
-          const merchants = await ifoodAPI.getMerchants(token);
-          if (merchants.length === 1 && merchants[0].id !== merchantId) {
-            merchantId = merchants[0].id;
-            console.log(`[menu fetch] resolvendo automaticamente para merchant real do iFood: ${merchantId} (${merchants[0].name})`);
-            items = await ifoodAPI.getMenuItems(merchantId, token);
-          } else {
-            throw new Error(`${innerErr.message}. Merchants disponíveis nesta conta iFood: ${merchants.map(m => `${m.id} (${m.name})`).join(', ') || 'nenhum'}`);
-          }
-        }
-
+        items = await ifoodAPI.getMenuItems(merchantId, token);
         console.log(`[menu fetch] ${items.length} items obtidos do iFood via API`);
       } catch (err) {
         console.error('[menu fetch] erro ao buscar do iFood:', err.message);

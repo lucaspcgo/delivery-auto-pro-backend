@@ -2,6 +2,8 @@ const express = require('express');
 const pool = require('../db/postgres');
 const food99 = require('../services/food99');
 const ifood = require('../services/ifood');
+const ifoodDistributed = require('../services/ifood-distributed');
+const ifoodAPI = require('../services/ifood-api-complete');
 const menu99food = require('../services/menu99food');
 const menuifood = require('../services/menuifood');
 const { authenticateToken } = require('../middleware/auth');
@@ -70,6 +72,81 @@ router.post('/:platform/disconnect', async (req, res) => {
   } catch (err) {
     console.error('[POST /integrations/:platform/disconnect] erro:', err);
     return res.status(500).json({ error: 'Erro ao desconectar integração' });
+  }
+});
+
+// ===== Autorização DISTRIBUÍDA do iFood (lojas de terceiros) =====
+
+// Passo 1: gera o código que o dono da loja digita no portal do iFood
+router.post('/ifood/authorize/start', async (req, res) => {
+  try {
+    const data = await ifoodDistributed.startAuthorization(req.user.id);
+    console.log(`[ifood-auth] código gerado para user ${req.user.id}: ${data.userCode}`);
+    return res.json(data);
+  } catch (err) {
+    console.error('[ifood-auth start] erro:', err.message);
+    return res.status(500).json({ error: 'Erro ao iniciar autorização', details: err.message });
+  }
+});
+
+// Passo 2: após o dono autorizar no portal, troca o código por tokens e
+// cadastra automaticamente as lojas autorizadas
+router.post('/ifood/authorize/complete', async (req, res) => {
+  try {
+    await ifoodDistributed.completeAuthorization(req.user.id);
+    const token = await ifoodDistributed.getAccessToken(req.user.id);
+    const merchants = await ifoodAPI.getMerchants(token);
+
+    const connected = [];
+    for (const merchant of merchants) {
+      const merchantId = merchant.id || merchant.merchantId;
+      const merchantName = merchant.name || merchant.corporateName || 'Loja iFood';
+
+      const existing = await pool.query(
+        `SELECT r.id FROM restaurants r
+         JOIN restaurant_platforms rp ON rp.restaurant_id = r.id
+         WHERE rp.platform = 'ifood' AND rp.platform_merchant_id = $1 AND r.user_id = $2`,
+        [merchantId, req.user.id]
+      );
+
+      let restaurantId;
+      if (existing.rows.length === 0) {
+        const inserted = await pool.query(
+          `INSERT INTO restaurants (name, owner_name, user_id) VALUES ($1, $2, $3) RETURNING id`,
+          [merchantName, 'Via iFood (autorizado)', req.user.id]
+        );
+        restaurantId = inserted.rows[0].id;
+      } else {
+        restaurantId = existing.rows[0].id;
+      }
+
+      await pool.query(
+        `INSERT INTO restaurant_platforms (restaurant_id, platform, platform_merchant_id, status, user_id)
+         VALUES ($1, 'ifood', $2, 'authorized', $3)
+         ON CONFLICT (restaurant_id, platform) DO UPDATE SET
+           platform_merchant_id = EXCLUDED.platform_merchant_id,
+           status = 'authorized', updated_at = now()`,
+        [restaurantId, merchantId, req.user.id]
+      );
+
+      connected.push({ id: merchantId, name: merchantName });
+    }
+
+    console.log(`[ifood-auth] user ${req.user.id} autorizou ${connected.length} loja(s)`);
+    return res.json({ success: true, connected });
+  } catch (err) {
+    console.error('[ifood-auth complete] erro:', err.message);
+    return res.status(400).json({ error: 'Erro ao concluir autorização', details: err.message });
+  }
+});
+
+// Status: o usuário já autorizou alguma loja iFood?
+router.get('/ifood/authorize/status', async (req, res) => {
+  try {
+    const authorized = await ifoodDistributed.isAuthorized(req.user.id);
+    return res.json({ authorized });
+  } catch (err) {
+    return res.status(500).json({ error: 'Erro ao verificar status', details: err.message });
   }
 });
 
