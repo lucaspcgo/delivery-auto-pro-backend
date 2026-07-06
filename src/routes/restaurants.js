@@ -38,7 +38,7 @@ router.post('/authorize', async (req, res) => {
       if (merchantData.status === 404 || merchantData.code) {
         return res.status(404).json({ error: 'Loja não encontrada no iFood. Verifique o Merchant ID.' });
       }
-      shopName = merchantData.name || merchantData.corporateName || 'Loja iFood';
+      shopName = merchantData.name || merchantData.corporateName || `iFood - ${platform_id}`;
       shopAddress = merchantData.address ? `${merchantData.address.streetName}, ${merchantData.address.streetNumber} - ${merchantData.address.neighborhood}` : '';
       merchantId = platform_id;
 
