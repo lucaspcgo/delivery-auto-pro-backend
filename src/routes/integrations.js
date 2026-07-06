@@ -2,6 +2,8 @@ const express = require('express');
 const pool = require('../db/postgres');
 const food99 = require('../services/food99');
 const ifood = require('../services/ifood');
+const menu99food = require('../services/menu99food');
+const menuifood = require('../services/menuifood');
 const { authenticateToken } = require('../middleware/auth');
 const router = express.Router();
 
@@ -79,12 +81,12 @@ async function syncIfoodMerchants(user_id) {
     const merchants = await new Promise((resolve, reject) => {
       const req = https.request({
         hostname: 'merchant-api.ifood.com.br',
-        path: '/merchant/v1.0/merchants',
+        path: '/merchants',
         method: 'GET',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
+        headers: { 'Authorization': `Bearer ${token}` }
       }, (res) => {
         let data = '';
-        res.on('data', c => data += c);
+        res.on('data', (chunk) => { data += chunk; });
         res.on('end', () => {
           try { resolve(JSON.parse(data)); } catch (e) { resolve([]); }
         });
@@ -132,6 +134,9 @@ async function syncIfoodMerchants(user_id) {
            status = 'authorized', updated_at = now()`,
         [restaurantId, merchantId, user_id]
       );
+
+      // NOVO: Sincronizar cardápio automaticamente
+      await syncMenuForRestaurant(restaurantId, 'ifood', merchantId, token);
     }
 
     console.log(`[sync-ifood] ${merchants.length} merchant(s) sincronizado(s)`);
@@ -143,8 +148,6 @@ async function syncIfoodMerchants(user_id) {
 // Busca lojas da 99Food cadastradas e sincroniza
 async function sync99foodShops(user_id) {
   try {
-    // A 99Food não tem endpoint para listar lojas — usamos as lojas já cadastradas no portal
-    // Busca a loja de teste que já temos
     const appShopId = 'loja_teste_001';
     const shopName = 'Marmita da Betinha';
 
@@ -178,9 +181,47 @@ async function sync99foodShops(user_id) {
       [restaurantId, appShopId, user_id]
     );
 
+    // NOVO: Sincronizar cardápio automaticamente
+    await syncMenuForRestaurant(restaurantId, '99food', appShopId, null);
+
     console.log(`[sync-99food] loja sincronizada: ${shopName}`);
   } catch (err) {
     console.error('[sync-99food] erro:', err.message);
+  }
+}
+
+// NOVO: Sincronizar cardápio automaticamente quando loja é adicionada
+async function syncMenuForRestaurant(restaurantId, platform, platformId, token) {
+  try {
+    console.log(`[menu-sync] Iniciando sincronização: restaurante=${restaurantId}, platform=${platform}`);
+
+    let items = [];
+
+    if (platform === 'ifood' && token) {
+      items = await menuifood.getMenuItems(platformId, token);
+    } else if (platform === '99food') {
+      items = await menu99food.getMenuItems(platformId, process.env.FOOD99_TOKEN);
+    }
+
+    if (!items || items.length === 0) {
+      console.log(`[menu-sync] Nenhum item encontrado para ${platform}`);
+      return;
+    }
+
+    // Salvar items no banco
+    const itemsJson = JSON.stringify(items);
+    await pool.query(
+      `INSERT INTO menu_items (restaurant_id, platform, platform_store_id, items_data, updated_at, created_at)
+       VALUES ($1, $2, $3, $4, NOW(), NOW())
+       ON CONFLICT (restaurant_id, platform) DO UPDATE SET
+         items_data = EXCLUDED.items_data,
+         updated_at = NOW()`,
+      [restaurantId, platform, platformId, itemsJson]
+    );
+
+    console.log(`[menu-sync] ✅ ${items.length} items sincronizados para ${platform}`);
+  } catch (err) {
+    console.error(`[menu-sync] erro ao sincronizar cardápio:`, err.message);
   }
 }
 
