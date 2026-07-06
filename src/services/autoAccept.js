@@ -1,68 +1,64 @@
 const pool = require('../db/postgres');
 const food99 = require('./food99');
-const ifood = require('./ifood');
+const ifoodDistributed = require('./ifood-distributed');
 
-async function tryAutoAccept(platform, orderId, appShopId) {
+// Aceita automaticamente um pedido conforme a regra de automação DO USUÁRIO dono da loja.
+// storeId = app_shop_id (99food) ou merchantId (iFood, guardado em orders.app_shop_id).
+async function tryAutoAccept(platform, orderId, storeId, userId) {
   try {
+    if (!userId) {
+      console.log(`[auto-accept] sem userId para pedido ${orderId} (${platform}) — ignorando`);
+      return false;
+    }
+
+    // Busca a regra de auto-aceite DESTE usuário (isolamento por conta)
     const rules = await pool.query(
-      `SELECT * FROM automation_rules 
-       WHERE action = 'auto_accept' AND enabled = true 
-       AND (platform = $1 OR platform = 'all')
+      `SELECT * FROM automation_rules
+       WHERE user_id = $1 AND action = 'auto_accept' AND enabled = true
+       AND (platform = $2 OR platform = 'all')
        ORDER BY platform DESC LIMIT 1`,
-      [platform]
+      [userId, platform]
     );
 
     if (rules.rows.length === 0) {
-      console.log(`[auto-accept] sem regra ativa para ${platform}`);
+      console.log(`[auto-accept] sem regra ativa para ${platform} (user ${userId})`);
       return false;
     }
 
     const rule = rules.rows[0];
-    const delay = rule.delay_seconds * 1000;
+    const delay = (rule.delay_seconds || 0) * 1000;
+    const readyDelay = (rule.ready_delay_seconds || 600) * 1000; // padrão 10 min
 
-    console.log(`[auto-accept] pedido ${orderId} (${platform}) será aceito em ${rule.delay_seconds}s`);
+    console.log(`[auto-accept] pedido ${orderId} (${platform}, user ${userId}) será aceito em ${rule.delay_seconds || 0}s`);
 
     setTimeout(async () => {
       try {
         if (platform === '99food') {
-          const authToken = await food99.getValidToken(appShopId);
+          const authToken = await food99.getValidToken(storeId);
           await food99.confirmOrder(authToken, orderId);
         } else if (platform === 'ifood') {
-          await ifood.confirmOrder(orderId);
+          await ifoodDistributed.confirmOrder(userId, orderId);
         }
 
         await pool.query(
-          `UPDATE orders SET status = 'confirmed', updated_at = now() 
-           WHERE platform = $1 AND platform_order_id = $2`,
-          [platform, String(orderId)]
+          `UPDATE orders SET status = 'confirmed', updated_at = now()
+           WHERE platform = $1 AND platform_order_id = $2 AND user_id = $3`,
+          [platform, String(orderId), userId]
         );
 
-        console.log(`[auto-accept] pedido ${orderId} (${platform}) ACEITO automaticamente`);
+        console.log(`[auto-accept] pedido ${orderId} (${platform}, user ${userId}) ACEITO automaticamente`);
 
-        // Após aceitar, marca como PRONTO automaticamente após 10 segundos
+        // Após aceitar, marca como PRONTO/DESPACHADO automaticamente
         setTimeout(async () => {
           try {
             if (platform === 'ifood') {
-              // iFood: readyToPickup → dispatch
-              const token = await ifood.getValidToken();
-              const https = require('https');
-              // Ready to pickup
-              await new Promise((resolve, reject) => {
-                const req = https.request({
-                  hostname: 'merchant-api.ifood.com.br',
-                  path: `/order/v1.0/orders/${orderId}/readyToPickup`,
-                  method: 'POST',
-                  headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
-                }, (res) => { let d = ''; res.on('data', c => d += c); res.on('end', () => resolve(d)); });
-                req.on('error', reject);
-                req.end();
-              });
-              // Dispatch
-              await ifood.dispatchOrder(orderId);
+              await ifoodDistributed.readyToPickup(userId, orderId).catch(e =>
+                console.warn(`[auto-ready] readyToPickup ${orderId}: ${e.message}`));
+              await ifoodDistributed.dispatchOrder(userId, orderId).catch(e =>
+                console.warn(`[auto-ready] dispatch ${orderId}: ${e.message}`));
               console.log(`[auto-ready] pedido ${orderId} (ifood) marcado como PRONTO e DESPACHADO`);
             } else if (platform === '99food') {
-              // 99Food: ready
-              const authToken = await food99.getValidToken(appShopId);
+              const authToken = await food99.getValidToken(storeId);
               const https = require('https');
               await new Promise((resolve, reject) => {
                 const path = `/v1/order/order/ready?auth_token=${encodeURIComponent(authToken)}&order_id=${orderId}`;
@@ -77,16 +73,16 @@ async function tryAutoAccept(platform, orderId, appShopId) {
             }
 
             await pool.query(
-              `UPDATE orders SET status = 'ready', updated_at = now() 
-               WHERE platform = $1 AND platform_order_id = $2`,
-              [platform, String(orderId)]
+              `UPDATE orders SET status = 'ready', updated_at = now()
+               WHERE platform = $1 AND platform_order_id = $2 AND user_id = $3`,
+              [platform, String(orderId), userId]
             );
 
-            console.log(`[auto-ready] pedido ${orderId} (${platform}) PRONTO automaticamente`);
+            console.log(`[auto-ready] pedido ${orderId} (${platform}, user ${userId}) PRONTO automaticamente`);
           } catch (err) {
             console.error(`[auto-ready] erro ao marcar pronto ${orderId}:`, err.message);
           }
-        }, 10000); // 10 segundos após aceitar
+        }, readyDelay);
 
       } catch (err) {
         console.error(`[auto-accept] erro ao aceitar ${orderId}:`, err.message);

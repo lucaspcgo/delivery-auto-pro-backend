@@ -1,6 +1,6 @@
 const express = require('express');
 const pool = require('../db/postgres');
-const ifood = require('../services/ifood');
+const ifoodDistributed = require('../services/ifood-distributed');
 const { tryAutoAccept } = require('../services/autoAccept');
 const { authenticateToken } = require('../middleware/auth');
 const router = express.Router();
@@ -38,7 +38,7 @@ router.post('/', async (req, res) => {
       }
 
       if (eventType === 'PLACED' || eventType === 'PLC') {
-        const order = await ifood.getOrderDetails(orderId);
+        const order = await ifoodDistributed.getOrderDetails(userId, orderId);
         const customerName = order.customer?.name || 'Cliente iFood';
         const customerPhone = order.customer?.phone?.number || null;
         const address = order.delivery?.deliveryAddress
@@ -67,7 +67,7 @@ router.post('/', async (req, res) => {
         );
         await pool.query(`UPDATE integrations SET orders_count=orders_count+1, last_sync_at=now(), updated_at=now() WHERE platform='ifood' AND user_id=$1`, [userId]);
         console.log(`[ifood webhook] pedido ${orderId} salvo (loja: ${shopName || merchantId}, user: ${userId})`);
-        await tryAutoAccept('ifood', orderId, null, userId);
+        await tryAutoAccept('ifood', orderId, merchantId, userId);
 
       } else if (eventType === 'CONFIRMED' || eventType === 'CFM') {
         await pool.query(`UPDATE orders SET status='confirmed', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1 AND user_id=$2`, [orderId, userId]);
@@ -112,7 +112,7 @@ router.post('/:orderId/confirm', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Acesso negado' });
     }
 
-    await ifood.confirmOrder(orderId);
+    await ifoodDistributed.confirmOrder(req.user.id, orderId);
     await pool.query(`UPDATE orders SET status='confirmed', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
     console.log(`[ifood confirm] pedido ${orderId} confirmado (user: ${req.user.id})`);
     return res.json({ success: true });
@@ -133,7 +133,7 @@ router.post('/:orderId/cancel', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Acesso negado' });
     }
 
-    await ifood.cancelOrder(orderId, reason);
+    await ifoodDistributed.cancelOrder(req.user.id, orderId, reason);
     await pool.query(`UPDATE orders SET status='cancelled', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
     console.log(`[ifood cancel] pedido ${orderId} cancelado (user: ${req.user.id})`);
     return res.json({ success: true });

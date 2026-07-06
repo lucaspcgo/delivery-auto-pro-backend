@@ -175,6 +175,57 @@ async function getAccessToken(userId) {
   return refreshToken(userId, row.refresh_token);
 }
 
+// Request autenticado para as APIs de pedido (JSON + Bearer). Aceita 200/202.
+function orderRequest(token, method, path, jsonBody) {
+  return new Promise((resolve, reject) => {
+    const payload = jsonBody ? JSON.stringify(jsonBody) : null;
+    const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
+    if (payload) headers['Content-Length'] = Buffer.byteLength(payload);
+
+    const req = https.request({ hostname: IFOOD_HOST, path, method, headers }, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          return reject(new Error(`iFood ${method} ${path} -> HTTP ${res.statusCode}: ${data.slice(0, 300)}`));
+        }
+        try { resolve(data ? JSON.parse(data) : null); }
+        catch (e) { resolve(data); }
+      });
+    });
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+// ===== Ações de pedido usando o token da loja autorizada =====
+async function getOrderDetails(userId, orderId) {
+  const token = await getAccessToken(userId);
+  return orderRequest(token, 'GET', `/order/v1.0/orders/${orderId}`, null);
+}
+
+async function confirmOrder(userId, orderId) {
+  const token = await getAccessToken(userId);
+  return orderRequest(token, 'POST', `/order/v1.0/orders/${orderId}/confirm`, null);
+}
+
+async function readyToPickup(userId, orderId) {
+  const token = await getAccessToken(userId);
+  return orderRequest(token, 'POST', `/order/v1.0/orders/${orderId}/readyToPickup`, null);
+}
+
+async function dispatchOrder(userId, orderId) {
+  const token = await getAccessToken(userId);
+  return orderRequest(token, 'POST', `/order/v1.0/orders/${orderId}/dispatch`, null);
+}
+
+async function cancelOrder(userId, orderId, reason) {
+  const token = await getAccessToken(userId);
+  return orderRequest(token, 'POST', `/order/v1.0/orders/${orderId}/requestCancellation`,
+    { reason: reason || 'INTERNAL_DIFFICULTIES', cancellationCode: '501' });
+}
+
 // Indica se o usuário já tem uma autorização válida
 async function isAuthorized(userId) {
   await ensureSchema();
@@ -188,5 +239,10 @@ module.exports = {
   startAuthorization,
   completeAuthorization,
   getAccessToken,
-  isAuthorized
+  isAuthorized,
+  getOrderDetails,
+  confirmOrder,
+  readyToPickup,
+  dispatchOrder,
+  cancelOrder
 };
