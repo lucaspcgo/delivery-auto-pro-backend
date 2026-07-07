@@ -3,6 +3,8 @@ const pool = require('../db/postgres');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const ifoodAPI = require('../services/ifood-api-complete');
 const ifoodDistributed = require('../services/ifood-distributed');
+const food99 = require('../services/food99');
+const menu99food = require('../services/menu99food');
 const router = express.Router();
 
 // GET /api/v1/admin/menu/restaurants
@@ -38,7 +40,7 @@ router.post('/fetch', authenticateToken, requireAdmin, async (req, res) => {
 
     // Buscar dados de acesso da plataforma
     const platData = await pool.query(
-      `SELECT rp.platform_store_id, rp.platform_merchant_id
+      `SELECT rp.platform_store_id, rp.platform_merchant_id, rp.app_shop_id
        FROM restaurant_platforms rp
        WHERE rp.restaurant_id = $1 AND rp.platform = $2`,
       [restaurant_id, platform]
@@ -49,7 +51,7 @@ router.post('/fetch', authenticateToken, requireAdmin, async (req, res) => {
       return res.json({ platform, items: [], items_count: 0, message: 'Nenhuma integração configurada' });
     }
 
-    const { platform_merchant_id, platform_store_id } = platData.rows[0];
+    const { platform_merchant_id, platform_store_id, app_shop_id } = platData.rows[0];
     let items = [];
 
     // Buscar via API REAL do iFood (usando o token da loja autorizada — modelo distribuído)
@@ -65,8 +67,18 @@ router.post('/fetch', authenticateToken, requireAdmin, async (req, res) => {
         return res.status(500).json({ error: 'Erro ao buscar cardápio do iFood', details: err.message });
       }
     } else if (platform === '99food') {
-      // TODO: Implementar 99Food API
-      return res.json({ platform, items: [], items_count: 0, message: '99Food em desenvolvimento' });
+      try {
+        const shopId = app_shop_id || platform_store_id;
+        if (!shopId) {
+          return res.json({ platform, items: [], items_count: 0, message: 'Loja 99Food sem app_shop_id configurado' });
+        }
+        const authToken = await food99.getValidToken(shopId);
+        items = await menu99food.getMenuItems(shopId, authToken);
+        console.log(`[menu fetch] ${items.length} items obtidos do 99Food via API`);
+      } catch (err) {
+        console.error('[menu fetch] erro ao buscar do 99Food:', err.message);
+        return res.status(500).json({ error: 'Erro ao buscar cardápio do 99Food', details: err.message });
+      }
     }
 
     // Salvar items no banco
