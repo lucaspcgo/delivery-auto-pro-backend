@@ -159,14 +159,23 @@ router.get('/99food/authorize-url', (req, res) => {
 
 // ===== Conectar loja 99Food pelo Shop ID =====
 router.post('/99food/connect-shop', async (req, res) => {
-  const { app_shop_id, name } = req.body;
-  if (!app_shop_id) {
-    return res.status(400).json({ error: 'Shop ID (app_shop_id) é obrigatório' });
+  const shopIdInput = req.body.shop_id || req.body.app_shop_id;
+  const { name } = req.body;
+  if (!shopIdInput) {
+    return res.status(400).json({ error: 'Shop ID é obrigatório' });
   }
+  // Usamos o mesmo id do 99Food como app_shop_id (mapeamento 1:1, único por loja)
+  const app_shop_id = String(shopIdInput);
   try {
-    // Valida que o app tem acesso a essa loja (gera token). Se falhar, a loja
-    // não está vinculada ao app no 99Food.
-    await food99.getValidToken(String(app_shop_id));
+    // Se a loja ainda não estiver vinculada (bind), o token falha — então
+    // fazemos o bind automaticamente e tentamos de novo.
+    try {
+      await food99.getValidToken(app_shop_id);
+    } catch (notBound) {
+      console.log(`[99food connect] loja ${app_shop_id} não vinculada — fazendo bind automático...`);
+      await food99.bindStore(shopIdInput, app_shop_id);
+      await food99.getValidToken(app_shop_id);
+    }
 
     const shopName = name || `Loja 99Food ${app_shop_id}`;
 

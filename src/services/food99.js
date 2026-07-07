@@ -1,8 +1,45 @@
 const https = require('https');
+const crypto = require('crypto');
 
 const BASE_URL = 'openapi.didi-food.com';
 const APP_ID = process.env.FOOD99_APP_ID;
 const APP_SECRET = process.env.FOOD99_APP_SECRET;
+
+// Gera a assinatura MD5 do 99Food: ordena as chaves, formata chave=valor
+// (arrays viram "Array"), junta com & e acrescenta o app_secret no fim.
+function generateSign(params) {
+  const toSign = Object.keys(params).sort()
+    .map(k => `${k}=${params[k]}`).join('&') + APP_SECRET;
+  return crypto.createHash('md5').update(toSign).digest('hex');
+}
+
+// POST JSON cru para openapi.99food.com (preserva IDs grandes de 64 bits)
+function postRaw99(path, rawBody) {
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'openapi.99food.com', path, method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(rawBody) }
+    }, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => { try { resolve(JSON.parse(data)); } catch (e) { reject(new Error('Resposta inválida: ' + data)); } });
+    });
+    req.on('error', reject);
+    req.write(rawBody); req.end();
+  });
+}
+
+// Vincula (bind) uma loja do 99Food ao app. shopId = ID no 99Food (int);
+// appShopId = ID no nosso sistema (usamos o mesmo, único por loja).
+async function bindStore(shopId, appShopId) {
+  if (!/^\d+$/.test(String(shopId))) throw new Error('shop_id inválido (apenas números)');
+  const ts = Math.floor(Date.now() / 1000);
+  const sign = generateSign({ app_id: String(APP_ID), timestamp: String(ts), shop_infos: 'Array' });
+  const rawBody = `{"app_id":${APP_ID},"timestamp":${ts},"sign":"${sign}","shop_infos":[{"shop_id":${shopId},"app_shop_id":"${appShopId}"}]}`;
+  const result = await postRaw99('/v3/auth/authorization/shopBind', rawBody);
+  if (result.errno !== 0) throw new Error(`[99food] Erro ao vincular loja: ${JSON.stringify(result)}`);
+  return result.data;
+}
 
 // Cache de tokens em memória
 const tokenCache = {};
@@ -94,4 +131,4 @@ async function cancelOrder(authToken, orderId, cancelCode = 1040) {
   return result.data;
 }
 
-module.exports = { refreshToken, getToken, getValidToken, getOrderDetail, confirmOrder, cancelOrder };
+module.exports = { refreshToken, getToken, getValidToken, getOrderDetail, confirmOrder, cancelOrder, bindStore };
