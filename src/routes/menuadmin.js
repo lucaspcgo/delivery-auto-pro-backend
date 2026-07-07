@@ -15,7 +15,7 @@ router.get('/restaurants', authenticateToken, requireAdmin, async (req, res) => 
               json_agg(json_build_object('platform', rp.platform, 'platform_id', rp.platform_store_id, 'status', rp.status)) as integrations
        FROM restaurants r
        LEFT JOIN restaurant_platforms rp ON r.id = rp.restaurant_id
-       WHERE r.user_id = $1
+       WHERE r.user_id = $1 AND r.active = true
        GROUP BY r.id, r.name, r.user_id
        ORDER BY r.name`,
       [req.user.id]
