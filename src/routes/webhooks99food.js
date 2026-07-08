@@ -3,6 +3,7 @@ const pool = require('../db/postgres');
 const food99 = require('../services/food99');
 const { tryAutoAccept } = require('../services/autoAccept');
 const { attachItemImages } = require('../services/orderImages');
+const { extractOrderExtras } = require('../services/orderExtras');
 const { authenticateToken } = require('../middleware/auth');
 const router = express.Router();
 
@@ -58,12 +59,16 @@ router.post('/', async (req, res) => {
 router.get('/orders', authenticateToken, async (req, res) => {
   try {
     const { date } = req.query;
-    let query = `SELECT id, platform, platform_order_id, app_shop_id, status, customer_name, delivery_address, items, total_price, created_at, updated_at FROM orders WHERE platform='99food' AND user_id=$1`;
+    let query = `SELECT id, platform, platform_order_id, app_shop_id, status, customer_name, customer_phone, delivery_address, items, total_price, raw_payload, created_at, updated_at FROM orders WHERE platform='99food' AND user_id=$1`;
     const params = [req.user.id];
     if (date) { query += ` AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = $2`; params.push(date); }
     query += ` ORDER BY created_at DESC LIMIT 100`;
     const result = await pool.query(query, params);
     const orders = await attachItemImages(result.rows, '99food', req.user.id);
+    for (const o of orders) {
+      Object.assign(o, extractOrderExtras(o.raw_payload, '99food'));
+      delete o.raw_payload; // não devolve o payload cru (grande)
+    }
     return res.json(orders);
   } catch (err) { return res.status(500).json({ error: 'Erro ao buscar pedidos' }); }
 });

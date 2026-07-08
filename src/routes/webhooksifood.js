@@ -3,6 +3,7 @@ const pool = require('../db/postgres');
 const ifoodDistributed = require('../services/ifood-distributed');
 const { processEvent } = require('../services/ifood-events');
 const { attachItemImages } = require('../services/orderImages');
+const { extractOrderExtras } = require('../services/orderExtras');
 const { authenticateToken } = require('../middleware/auth');
 const router = express.Router();
 
@@ -24,12 +25,16 @@ router.post('/', async (req, res) => {
 router.get('/orders', authenticateToken, async (req, res) => {
   try {
     const { date } = req.query;
-    let query = `SELECT id, platform, platform_order_id, app_shop_id, status, customer_name, delivery_address, items, total_price, created_at, updated_at FROM orders WHERE platform='ifood' AND user_id=$1`;
+    let query = `SELECT id, platform, platform_order_id, app_shop_id, status, customer_name, customer_phone, delivery_address, items, total_price, raw_payload, created_at, updated_at FROM orders WHERE platform='ifood' AND user_id=$1`;
     const params = [req.user.id];
     if (date) { query += ` AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = $2`; params.push(date); }
     query += ` ORDER BY created_at DESC LIMIT 100`;
     const result = await pool.query(query, params);
     const orders = await attachItemImages(result.rows, 'ifood', req.user.id);
+    for (const o of orders) {
+      Object.assign(o, extractOrderExtras(o.raw_payload, 'ifood'));
+      delete o.raw_payload; // não devolve o payload cru (grande)
+    }
     return res.json(orders);
   } catch (err) { return res.status(500).json({ error: 'Erro ao buscar pedidos' }); }
 });
