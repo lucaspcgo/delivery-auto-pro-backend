@@ -3,6 +3,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const pool = require('../db/postgres');
+const kdsSettings = require('../services/kdsSettings');
 const router = express.Router();
 
 const { JWT_SECRET } = require('../config/env');
@@ -141,6 +142,27 @@ router.post('/2fa/disable', async (req, res) => {
   try {
     await pool.query('UPDATE users SET totp_enabled=false, totp_secret=null, updated_at=now() WHERE id=$1', [req.user.id]);
     return res.json({ success: true, message: '2FA desativado' });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/v1/settings/kds — configuração do KDS + catálogo de campos disponíveis
+router.get('/kds', async (req, res) => {
+  try {
+    const data = await kdsSettings.getSettings(req.user.id);
+    return res.json(data);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/v1/settings/kds — salvar quais campos o usuário quer ver no KDS
+// Body: { fields: { customer_name: true, item_image: false, ... } }
+router.put('/kds', async (req, res) => {
+  try {
+    const data = await kdsSettings.saveSettings(req.user.id, req.body);
+    return res.json({ success: true, ...data });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
