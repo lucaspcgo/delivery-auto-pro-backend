@@ -26,10 +26,11 @@ async function tryAutoAccept(platform, orderId, storeId, userId) {
     }
 
     const rule = rules.rows[0];
-    const delay = (rule.delay_seconds || 0) * 1000;
-    const readyDelay = (rule.ready_delay_seconds || 600) * 1000; // padrão 10 min
+    // Aceita imediatamente; marca "pronto" após o tempo configurado (delay_seconds).
+    const delay = 0;
+    const readyDelay = (rule.delay_seconds != null ? rule.delay_seconds : 480) * 1000; // padrão 8 min
 
-    console.log(`[auto-accept] pedido ${orderId} (${platform}, user ${userId}) será aceito em ${rule.delay_seconds || 0}s`);
+    console.log(`[auto-accept] pedido ${orderId} (${platform}, user ${userId}) aceito já; pronto em ${Math.round(readyDelay / 1000)}s`);
 
     setTimeout(async () => {
       try {
@@ -59,16 +60,8 @@ async function tryAutoAccept(platform, orderId, storeId, userId) {
               console.log(`[auto-ready] pedido ${orderId} (ifood) marcado como PRONTO e DESPACHADO`);
             } else if (platform === '99food') {
               const authToken = await food99.getValidToken(storeId);
-              const https = require('https');
-              await new Promise((resolve, reject) => {
-                const path = `/v1/order/order/ready?auth_token=${encodeURIComponent(authToken)}&order_id=${orderId}`;
-                const req = https.request({
-                  hostname: 'openapi.didi-food.com', path, method: 'GET',
-                  headers: { 'Content-Type': 'application/json' }
-                }, (res) => { let d = ''; res.on('data', c => d += c); res.on('end', () => resolve(d)); });
-                req.on('error', reject);
-                req.end();
-              });
+              await food99.readyOrder(authToken, orderId).catch(e =>
+                console.warn(`[auto-ready] ready 99food ${orderId}: ${e.message}`));
               console.log(`[auto-ready] pedido ${orderId} (99food) marcado como PRONTO`);
             }
 

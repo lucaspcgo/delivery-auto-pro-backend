@@ -125,10 +125,16 @@ async function confirmOrder(authToken, orderId) {
   return result.data;
 }
 
+async function readyOrder(authToken, orderId) {
+  const result = await apiPost('/v1/order/order/ready', { auth_token: authToken, order_id: orderId });
+  if (result.errno !== 0) throw new Error(`[99food] Erro ao marcar pronto: ${JSON.stringify(result)}`);
+  return result.data;
+}
+
 async function cancelOrder(authToken, orderId, cancelCode = 1040) {
   const result = await apiPost('/v1/order/order/cancel', { auth_token: authToken, order_id: orderId, cancel_info: { cancel_code: cancelCode } });
   if (result.errno !== 0) throw new Error(`[99food] Erro ao cancelar pedido: ${JSON.stringify(result)}`);
   return result.data;
 }
 
-module.exports = { refreshToken, getToken, getValidToken, getOrderDetail, confirmOrder, cancelOrder, bindStore };
+module.exports = { refreshToken, getToken, getValidToken, getOrderDetail, confirmOrder, readyOrder, cancelOrder, bindStore };
