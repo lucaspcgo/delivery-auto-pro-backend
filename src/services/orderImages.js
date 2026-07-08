@@ -41,8 +41,13 @@ async function attachItemImages(orders, platform, userId) {
     return orders; // sem fotos, mas retorna os pedidos normalmente
   }
 
-  if (byId.size === 0 && byName.size === 0) return orders; // nada pra casar
+  console.log(`[order images] ${platform}: ${byId.size} foto(s) por código, ${byName.size} por nome no cardápio salvo`);
+  if (byId.size === 0 && byName.size === 0) {
+    console.log(`[order images] ${platform}: NENHUMA foto no cardápio salvo — cadastre foto no produto e clique em "Buscar cardápio".`);
+    return orders;
+  }
 
+  let casados = 0, semFoto = 0;
   for (const o of orders) {
     const items = parse(o.items);
     if (!Array.isArray(items)) continue;
@@ -54,9 +59,11 @@ async function attachItemImages(orders, platform, userId) {
         || (id != null && byId.get(String(id)))
         || (name && byName.get(norm(name)))
         || null;
+      if (image) casados++; else { semFoto++; console.log(`[order images] item sem foto (id=${id}, nome=${name})`); }
       return { ...it, image };
     });
   }
+  console.log(`[order images] ${platform}: ${casados} item(ns) com foto, ${semFoto} sem foto`);
   return orders;
 }
 
