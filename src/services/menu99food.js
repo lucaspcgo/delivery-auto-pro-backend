@@ -182,6 +182,49 @@ function buildMergePayload(destRaw, sourceRaw, selectedIds) {
   return { payload, added, updated, total: payload.items.length };
 }
 
+// ── Copiar UM item para a loja (endpoint "Update One Item") ──
+// POST https://openapi.99food.com/v3/item/item/updateItem
+// Mexe SÓ nesse item — NUNCA apaga/altera os outros itens da loja.
+// rawItem = item cru vindo do "Get Store Menu Details" (preço já em centavos).
+function itemToUpdateBody(rawItem) {
+  const body = {
+    app_item_id: String(rawItem.app_item_id),
+    item_name: rawItem.item_name || 'Item',
+    price: Math.round(Number(rawItem.price ?? rawItem.activity_price ?? 0)),
+    status: rawItem.status === 2 ? 2 : 1,
+    is_sold_separately: rawItem.is_sold_separately !== false,
+    short_desc: rawItem.short_desc || ''
+  };
+  if (rawItem.head_img) body.head_img = rawItem.head_img;
+  return body;
+}
+
+function updateOneItem(authToken, rawItem) {
+  const payload = JSON.stringify({ auth_token: authToken, ...itemToUpdateBody(rawItem) });
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: HOST, path: '/v3/item/item/updateItem', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }
+    }, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.errno !== 0) {
+            return reject(new Error(`${parsed.errmsg} (errno ${parsed.errno})`));
+          }
+          resolve(parsed.data || {});
+        } catch (err) {
+          reject(new Error('resposta inválida do 99Food: ' + data.slice(0, 200)));
+        }
+      });
+    });
+    req.on('error', (err) => reject(new Error('falha de rede: ' + err.message)));
+    req.write(payload); req.end();
+  });
+}
+
 // ── Enviar (upload) cardápio para uma loja ──
 // POST https://openapi.99food.com/v3/item/item/upload
 // SOBRESCREVE o cardápio da loja. Retorna { taskId, status } (processa async).
@@ -213,4 +256,4 @@ function uploadMenu(authToken, payload) {
   });
 }
 
-module.exports = { fetchRawMenu, simplifyItems, getMenuItems, buildUploadPayload, buildMergePayload, uploadMenu };
+module.exports = { fetchRawMenu, simplifyItems, getMenuItems, buildUploadPayload, buildMergePayload, uploadMenu, updateOneItem };

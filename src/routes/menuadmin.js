@@ -135,9 +135,9 @@ router.post('/copy', authenticateToken, requireAdmin, async (req, res) => {
     const itemsCount = selected_items?.length || 0;
     console.log(`[menu copy] Copiando ${itemsCount} itens (${from_platform} -> ${to_platform})`);
 
-    // ── Envio REAL para o 99Food — modo JUNTAR (não apaga o que já existe) ──
-    let taskId = null;
-    let mergeInfo = null;
+    // ── Copiar para o 99Food — modo ITEM POR ITEM ("Update One Item") ──
+    //    Mexe só nos itens escolhidos; NUNCA sobrescreve nem apaga o resto da loja.
+    let copyReport = null;
     if (to_platform === '99food') {
       // 1) Precisa do cardápio cru da origem (carregado no "Buscar cardápio")
       const cached = rawMenuCache.get(`${from_restaurant_id}:99food`);
@@ -156,63 +156,43 @@ router.post('/copy', authenticateToken, requireAdmin, async (req, res) => {
         return res.status(400).json({ error: 'A loja de destino não tem 99Food configurado.' });
       }
 
-      // O front pode mandar cada item como texto ("item_teste_1") ou como objeto ({id/app_item_id/productId})
+      // 3) Quais itens copiar (front manda cada item como texto ou objeto)
       const selectedIds = (selected_items || [])
         .map(i => (typeof i === 'string' || typeof i === 'number')
           ? String(i)
           : String(i?.id ?? i?.app_item_id ?? i?.productId ?? ''))
         .filter(Boolean);
-      console.log('[menu copy] selected_items recebidos:', JSON.stringify(selected_items || []).slice(0, 400));
-      console.log('[menu copy] selectedIds extraídos:', selectedIds.join(', ') || '(vazio)');
+      console.log('[menu copy] selectedIds:', selectedIds.join(', ') || '(todos)');
 
+      const srcItems = (Array.isArray(cached.raw.items) ? cached.raw.items : [])
+        .filter(it => it.app_item_id && (!selectedIds.length || selectedIds.includes(String(it.app_item_id))));
+      if (!srcItems.length) {
+        return res.status(400).json({ error: 'Nenhum item selecionado encontrado no cardápio de origem.' });
+      }
+
+      // 4) Copia UM item de cada vez — nunca toca nos outros itens da loja de destino
       const destToken = await food99.getValidToken(destShop);
+      const ok = [], fail = [];
+      for (const it of srcItems) {
+        try {
+          await menu99food.updateOneItem(destToken, it);
+          ok.push(it.app_item_id);
+          console.log(`[menu copy] item ${it.app_item_id} copiado para loja ${destShop}`);
+        } catch (err) {
+          fail.push({ id: it.app_item_id, error: err.message });
+          console.error(`[menu copy] falha ao copiar item ${it.app_item_id}: ${err.message}`);
+        }
+      }
+      copyReport = { ok: ok.length, fail: fail.length, failures: fail };
+      console.log(`[menu copy] loja ${destShop}: ${ok.length} copiado(s), ${fail.length} falha(s)`);
 
-      // 3) TRAVA DE SEGURANÇA: ler o cardápio ATUAL do destino antes de qualquer envio.
-      //    Se não conseguir ler, CANCELA (não arrisca apagar o que já está lá).
-      let destRaw;
-      try {
-        destRaw = await menu99food.fetchRawMenu(destToken);
-      } catch (err) {
-        console.error('[menu copy] não consegui ler o cardápio do destino, CANCELANDO envio:', err.message);
-        return res.status(409).json({
-          error: 'Cancelei o envio por segurança: não consegui ler o cardápio atual da loja de destino, ' +
-                 'então não vou arriscar apagar o que já existe lá. Tente de novo em ~1 min.',
-          details: err.message
+      // Se NENHUM item foi copiado, devolve o erro (não registra sucesso falso)
+      if (ok.length === 0) {
+        return res.status(502).json({
+          error: 'Nenhum item foi copiado. O 99Food recusou a atualização.',
+          details: fail[0]?.error, failures: fail
         });
       }
-
-      const destItemsRaw = Array.isArray(destRaw.items) ? destRaw.items : [];
-      const destIds = destItemsRaw.map(i => i.app_item_id);
-      const destUniqueIds = new Set(destIds.map(String));
-      console.log(`[menu copy] destino tem ${destItemsRaw.length} item(ns) crus, ${destUniqueIds.size} código(s) único(s): ${destIds.join(', ')}`);
-
-      // 4) Junta (destino + selecionados da origem)
-      const { payload, added, updated, total } = menu99food.buildMergePayload(
-        destRaw, cached.raw, selectedIds.length ? selectedIds : null
-      );
-      if (!total) {
-        return res.status(400).json({ error: 'Nenhum item para enviar (origem e destino vazios).' });
-      }
-
-      // 5) TRAVA CONTRA PERDA: o upload SOBRESCREVE. Se o resultado tiver MENOS itens
-      //    do que a loja já mostra, algo daria errado (ex.: itens com código repetido).
-      //    CANCELA para nunca apagar/reduzir o cardápio da loja de destino.
-      if (payload.items.length < destItemsRaw.length) {
-        console.error(`[menu copy] BLOQUEADO: envio ficaria com ${payload.items.length} item(ns) mas o destino tem ${destItemsRaw.length}. Cancelando para não apagar.`);
-        const dupAviso = destUniqueIds.size < destItemsRaw.length
-          ? ' Motivo provável: a loja tem itens com o MESMO código interno (app_item_id) — precisam de códigos diferentes.'
-          : '';
-        return res.status(409).json({
-          error: `Cancelei por segurança: o envio ficaria com ${payload.items.length} item(ns), ` +
-                 `mas a loja de destino já tem ${destItemsRaw.length}. Isso apagaria itens, então não enviei.` + dupAviso,
-          dest_items: destItemsRaw.length, would_send: payload.items.length
-        });
-      }
-
-      const uploadResult = await menu99food.uploadMenu(destToken, payload);
-      taskId = uploadResult.taskId || null;
-      mergeInfo = { added, updated, total };
-      console.log(`[menu copy] loja ${destShop}: ${added} novo(s), ${updated} atualizado(s), total ${total} no cardápio; taskId=${taskId}`);
     }
 
     // Registrar a cópia no banco (histórico)
@@ -227,13 +207,13 @@ router.post('/copy', authenticateToken, requireAdmin, async (req, res) => {
 
     res.json({
       success: true,
-      message: to_platform === '99food' && mergeInfo
-        ? `Pronto! ${mergeInfo.added} item(ns) novo(s) adicionado(s) e ${mergeInfo.updated} atualizado(s), ` +
-          `sem apagar o que já existia. O 99Food processa em ~1 min — confira no painel da loja.`
+      message: to_platform === '99food' && copyReport
+        ? `Pronto! ${copyReport.ok} item(ns) copiado(s) para a loja de destino` +
+          (copyReport.fail ? `, ${copyReport.fail} falharam.` : ', sem apagar nada do que já existia.') +
+          ' Confira no painel da loja (pode levar 1–2 min para atualizar).'
         : `${itemsCount} itens registrados.`,
-      copied_items: itemsCount,
-      merge: mergeInfo,
-      task_id: taskId,
+      copied_items: to_platform === '99food' && copyReport ? copyReport.ok : itemsCount,
+      report: copyReport,
       copy_id: result.rows[0]?.id
     });
   } catch (err) {
