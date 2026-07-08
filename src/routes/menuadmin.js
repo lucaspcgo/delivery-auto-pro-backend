@@ -158,6 +158,8 @@ router.post('/copy', authenticateToken, requireAdmin, async (req, res) => {
 
       const selectedIds = (selected_items || [])
         .map(i => String(i?.id ?? i?.app_item_id ?? i?.productId ?? '')).filter(Boolean);
+      console.log('[menu copy] selected_items recebidos:', JSON.stringify(selected_items || []).slice(0, 400));
+      console.log('[menu copy] selectedIds extraídos:', selectedIds.join(', ') || '(vazio)');
 
       const destToken = await food99.getValidToken(destShop);
 
@@ -175,12 +177,32 @@ router.post('/copy', authenticateToken, requireAdmin, async (req, res) => {
         });
       }
 
-      // 4) Junta (destino + selecionados da origem) e envia o conjunto todo
+      const destItemsRaw = Array.isArray(destRaw.items) ? destRaw.items : [];
+      const destIds = destItemsRaw.map(i => i.app_item_id);
+      const destUniqueIds = new Set(destIds.map(String));
+      console.log(`[menu copy] destino tem ${destItemsRaw.length} item(ns) crus, ${destUniqueIds.size} código(s) único(s): ${destIds.join(', ')}`);
+
+      // 4) Junta (destino + selecionados da origem)
       const { payload, added, updated, total } = menu99food.buildMergePayload(
         destRaw, cached.raw, selectedIds.length ? selectedIds : null
       );
       if (!total) {
         return res.status(400).json({ error: 'Nenhum item para enviar (origem e destino vazios).' });
+      }
+
+      // 5) TRAVA CONTRA PERDA: o upload SOBRESCREVE. Se o resultado tiver MENOS itens
+      //    do que a loja já mostra, algo daria errado (ex.: itens com código repetido).
+      //    CANCELA para nunca apagar/reduzir o cardápio da loja de destino.
+      if (payload.items.length < destItemsRaw.length) {
+        console.error(`[menu copy] BLOQUEADO: envio ficaria com ${payload.items.length} item(ns) mas o destino tem ${destItemsRaw.length}. Cancelando para não apagar.`);
+        const dupAviso = destUniqueIds.size < destItemsRaw.length
+          ? ' Motivo provável: a loja tem itens com o MESMO código interno (app_item_id) — precisam de códigos diferentes.'
+          : '';
+        return res.status(409).json({
+          error: `Cancelei por segurança: o envio ficaria com ${payload.items.length} item(ns), ` +
+                 `mas a loja de destino já tem ${destItemsRaw.length}. Isso apagaria itens, então não enviei.` + dupAviso,
+          dest_items: destItemsRaw.length, would_send: payload.items.length
+        });
       }
 
       const uploadResult = await menu99food.uploadMenu(destToken, payload);
