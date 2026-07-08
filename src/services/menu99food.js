@@ -5,7 +5,7 @@ const https = require('https');
 // Resposta: { errno, data: { menus, categories, items, modifier_groups } }
 async function getMenuItems(appShopId, authToken) {
   const path = `/v3/item/item/list?auth_token=${encodeURIComponent(authToken)}`;
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     https.get({ hostname: 'openapi.99food.com', path }, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
@@ -13,8 +13,9 @@ async function getMenuItems(appShopId, authToken) {
         try {
           const parsed = JSON.parse(data);
           if (parsed.errno !== 0) {
+            // NÃO engolir o erro: repassa o motivo real (token expirado, loja não vinculada, etc.)
             console.log(`[99food menu] loja ${appShopId}: ${parsed.errmsg} (errno ${parsed.errno})`);
-            return resolve([]);
+            return reject(new Error(`99Food recusou a busca do cardápio: ${parsed.errmsg} (errno ${parsed.errno})`));
           }
           const d = parsed.data || {};
           const categories = Array.isArray(d.categories) ? d.categories : [];
@@ -51,13 +52,13 @@ async function getMenuItems(appShopId, authToken) {
           console.log(`[99food menu] loja ${appShopId}: ${items.length} item(ns)`);
           resolve(items);
         } catch (err) {
-          console.error('[99food menu] erro ao parsear:', err.message);
-          resolve([]);
+          console.error('[99food menu] erro ao parsear:', err.message, '| resposta:', data.slice(0, 300));
+          reject(new Error('99Food retornou resposta inválida'));
         }
       });
     }).on('error', (err) => {
       console.error('[99food menu] erro de rede:', err.message);
-      resolve([]);
+      reject(new Error('Falha de rede ao buscar cardápio no 99Food: ' + err.message));
     });
   });
 }
