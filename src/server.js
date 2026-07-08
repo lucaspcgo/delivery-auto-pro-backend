@@ -110,4 +110,10 @@ app.listen(PORT, () => {
   } catch (err) {
     console.error('[server] falha ao iniciar polling do iFood:', err.message);
   }
+  // Atualiza o cache do cardápio 99Food periodicamente (fotos frescas no KDS)
+  try {
+    require('./services/menu-cache-refresher').startMenuCacheRefresh();
+  } catch (err) {
+    console.error('[server] falha ao iniciar atualização de cardápio:', err.message);
+  }
 });
