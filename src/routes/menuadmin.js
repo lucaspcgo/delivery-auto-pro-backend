@@ -164,8 +164,11 @@ router.post('/copy', authenticateToken, requireAdmin, async (req, res) => {
         .filter(Boolean);
       console.log('[menu copy] selectedIds:', selectedIds.join(', ') || '(todos)');
 
+      // Filtra pelos selecionados e remove códigos repetidos (evita copiar o mesmo id 2x)
+      const seenIds = new Set();
       const srcItems = (Array.isArray(cached.raw.items) ? cached.raw.items : [])
-        .filter(it => it.app_item_id && (!selectedIds.length || selectedIds.includes(String(it.app_item_id))));
+        .filter(it => it.app_item_id && (!selectedIds.length || selectedIds.includes(String(it.app_item_id))))
+        .filter(it => { const k = String(it.app_item_id); if (seenIds.has(k)) return false; seenIds.add(k); return true; });
       if (!srcItems.length) {
         return res.status(400).json({ error: 'Nenhum item selecionado encontrado no cardápio de origem.' });
       }
