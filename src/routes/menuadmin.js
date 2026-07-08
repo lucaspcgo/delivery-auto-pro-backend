@@ -67,16 +67,31 @@ router.post('/fetch', authenticateToken, requireAdmin, async (req, res) => {
         return res.status(500).json({ error: 'Erro ao buscar cardápio do iFood', details: err.message });
       }
     } else if (platform === '99food') {
+      const shopId = app_shop_id || platform_store_id;
+      if (!shopId) {
+        return res.json({ platform, items: [], items_count: 0, message: 'Loja 99Food sem app_shop_id configurado' });
+      }
       try {
-        const shopId = app_shop_id || platform_store_id;
-        if (!shopId) {
-          return res.json({ platform, items: [], items_count: 0, message: 'Loja 99Food sem app_shop_id configurado' });
-        }
         const authToken = await food99.getValidToken(shopId);
         items = await menu99food.getMenuItems(shopId, authToken);
         console.log(`[menu fetch] ${items.length} items obtidos do 99Food via API`);
       } catch (err) {
         console.error('[menu fetch] erro ao buscar do 99Food:', err.message);
+        // O 99Food limita a busca do cardápio (2x a cada 120s). Se recusar, devolve o
+        // último cardápio salvo no banco em vez de dar erro na tela.
+        const cached = await pool.query(
+          `SELECT items_data FROM menu_items WHERE restaurant_id = $1 AND platform = $2`,
+          [restaurant_id, platform]
+        );
+        const raw = cached.rows[0]?.items_data;
+        if (raw) {
+          const cachedItems = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          console.log(`[menu fetch] usando cardápio salvo (${cachedItems.length} itens) — motivo: ${err.message}`);
+          return res.json({
+            platform, items: cachedItems, items_count: cachedItems.length, cached: true,
+            message: 'Cardápio do último carregamento (99Food limita atualização; tente de novo em ~1 min).'
+          });
+        }
         return res.status(500).json({ error: 'Erro ao buscar cardápio do 99Food', details: err.message });
       }
     }
@@ -90,7 +105,7 @@ router.post('/fetch', authenticateToken, requireAdmin, async (req, res) => {
          ON CONFLICT (restaurant_id, platform) DO UPDATE SET
            items_data = EXCLUDED.items_data,
            updated_at = NOW()`,
-        [restaurant_id, platform, platform_merchant_id || platform_store_id, itemsJson]
+        [restaurant_id, platform, platform_merchant_id || platform_store_id || app_shop_id, itemsJson]
       );
     }
 
