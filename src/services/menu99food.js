@@ -144,6 +144,44 @@ function buildUploadPayload(rawData, selectedIds) {
   return { menus, categories, items, modifier_groups };
 }
 
+// ── Monta um envio que JUNTA (merge) o cardápio de destino + itens da origem ──
+// Assim NADA é apagado no destino: mantém o que já existe e acrescenta/atualiza
+// os itens selecionados da origem (colisão de app_item_id = origem sobrescreve).
+// destRaw/sourceRaw são cardápios CRUS (fetchRawMenu). selectedIds = itens a copiar.
+function buildMergePayload(destRaw, sourceRaw, selectedIds) {
+  const dest = destRaw || {}, src = sourceRaw || {};
+  const idSet = selectedIds ? new Set(selectedIds.map(String)) : null;
+  const destItems = Array.isArray(dest.items) ? dest.items : [];
+  const srcItems = (Array.isArray(src.items) ? src.items : [])
+    .filter(it => it.app_item_id && (!idSet || idSet.has(String(it.app_item_id))));
+
+  // União dos itens crus por app_item_id (mantém os do destino; origem entra/atualiza)
+  const itemsById = new Map();
+  for (const it of destItems) if (it.app_item_id) itemsById.set(String(it.app_item_id), it);
+  let added = 0, updated = 0;
+  for (const it of srcItems) {
+    const id = String(it.app_item_id);
+    if (itemsById.has(id)) updated++; else added++;
+    itemsById.set(id, it);
+  }
+
+  // União de modifier_groups por id (sem duplicar)
+  const mgById = new Map();
+  for (const mg of [...(dest.modifier_groups || []), ...(src.modifier_groups || [])]) {
+    if (mg && mg.app_modifier_group_id) mgById.set(String(mg.app_modifier_group_id), mg);
+  }
+
+  const mergedRaw = {
+    categories: [...(dest.categories || []), ...(src.categories || [])],
+    items: Array.from(itemsById.values()),
+    modifier_groups: Array.from(mgById.values())
+  };
+
+  // null = inclui TODOS os itens da união (destino + novos)
+  const payload = buildUploadPayload(mergedRaw, null);
+  return { payload, added, updated, total: payload.items.length };
+}
+
 // ── Enviar (upload) cardápio para uma loja ──
 // POST https://openapi.99food.com/v3/item/item/upload
 // SOBRESCREVE o cardápio da loja. Retorna { taskId, status } (processa async).
@@ -175,4 +213,4 @@ function uploadMenu(authToken, payload) {
   });
 }
 
-module.exports = { fetchRawMenu, simplifyItems, getMenuItems, buildUploadPayload, uploadMenu };
+module.exports = { fetchRawMenu, simplifyItems, getMenuItems, buildUploadPayload, buildMergePayload, uploadMenu };
