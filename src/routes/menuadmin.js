@@ -102,6 +102,23 @@ router.post('/fetch', authenticateToken, requireAdmin, async (req, res) => {
       }
     }
 
+    // Junta itens com o MESMO código (id) numa linha só — evita mostrar duplicados
+    // e o problema de "marquei 1 e selecionou 2" na tela.
+    if (items.length > 0) {
+      const vistos = new Set();
+      const antes = items.length;
+      items = items.filter(it => {
+        const k = String(it.id ?? it.productId ?? '');
+        if (!k) return true;
+        if (vistos.has(k)) return false;
+        vistos.add(k);
+        return true;
+      });
+      if (items.length !== antes) {
+        console.log(`[menu fetch] ${antes - items.length} item(ns) com código repetido ocultado(s) (mostrando ${items.length})`);
+      }
+    }
+
     // Salvar items no banco
     if (items.length > 0) {
       const itemsJson = JSON.stringify(items);
