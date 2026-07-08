@@ -156,8 +156,12 @@ router.post('/copy', authenticateToken, requireAdmin, async (req, res) => {
         return res.status(400).json({ error: 'A loja de destino não tem 99Food configurado.' });
       }
 
+      // O front pode mandar cada item como texto ("item_teste_1") ou como objeto ({id/app_item_id/productId})
       const selectedIds = (selected_items || [])
-        .map(i => String(i?.id ?? i?.app_item_id ?? i?.productId ?? '')).filter(Boolean);
+        .map(i => (typeof i === 'string' || typeof i === 'number')
+          ? String(i)
+          : String(i?.id ?? i?.app_item_id ?? i?.productId ?? ''))
+        .filter(Boolean);
       console.log('[menu copy] selected_items recebidos:', JSON.stringify(selected_items || []).slice(0, 400));
       console.log('[menu copy] selectedIds extraídos:', selectedIds.join(', ') || '(vazio)');
 
