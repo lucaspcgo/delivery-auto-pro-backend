@@ -2,6 +2,7 @@ const express = require('express');
 const pool = require('../db/postgres');
 const ifoodDistributed = require('../services/ifood-distributed');
 const { processEvent } = require('../services/ifood-events');
+const { attachItemImages } = require('../services/orderImages');
 const { authenticateToken } = require('../middleware/auth');
 const router = express.Router();
 
@@ -28,7 +29,8 @@ router.get('/orders', authenticateToken, async (req, res) => {
     if (date) { query += ` AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = $2`; params.push(date); }
     query += ` ORDER BY created_at DESC LIMIT 100`;
     const result = await pool.query(query, params);
-    return res.json(result.rows);
+    const orders = await attachItemImages(result.rows, 'ifood', req.user.id);
+    return res.json(orders);
   } catch (err) { return res.status(500).json({ error: 'Erro ao buscar pedidos' }); }
 });
 
