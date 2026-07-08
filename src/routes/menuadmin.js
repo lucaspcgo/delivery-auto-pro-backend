@@ -7,6 +7,10 @@ const food99 = require('../services/food99');
 const menu99food = require('../services/menu99food');
 const router = express.Router();
 
+// Cache do cardápio CRU por restaurante (preenchido no "Buscar cardápio").
+// Usado no "Copiar" para montar o envio sem re-buscar (evita o rate-limit do 99Food).
+const rawMenuCache = new Map(); // `${restaurant_id}:99food` -> { raw, at }
+
 // GET /api/v1/admin/menu/restaurants
 router.get('/restaurants', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -73,7 +77,9 @@ router.post('/fetch', authenticateToken, requireAdmin, async (req, res) => {
       }
       try {
         const authToken = await food99.getValidToken(shopId);
-        items = await menu99food.getMenuItems(shopId, authToken);
+        const raw = await menu99food.fetchRawMenu(authToken);
+        rawMenuCache.set(`${restaurant_id}:99food`, { raw, at: Date.now() });
+        items = menu99food.simplifyItems(raw, shopId);
         console.log(`[menu fetch] ${items.length} items obtidos do 99Food via API`);
       } catch (err) {
         console.error('[menu fetch] erro ao buscar do 99Food:', err.message);
@@ -127,9 +133,43 @@ router.post('/copy', authenticateToken, requireAdmin, async (req, res) => {
     }
 
     const itemsCount = selected_items?.length || 0;
-    console.log(`[menu copy] Copiando ${itemsCount} itens`);
+    console.log(`[menu copy] Copiando ${itemsCount} itens (${from_platform} -> ${to_platform})`);
 
-    // Inserir no banco
+    // ── Envio REAL para o 99Food (SOBRESCREVE o cardápio da loja de destino) ──
+    let taskId = null;
+    if (to_platform === '99food') {
+      // 1) Precisa do cardápio cru da origem (carregado no "Buscar cardápio")
+      const cached = rawMenuCache.get(`${from_restaurant_id}:99food`);
+      if (!cached) {
+        return res.status(400).json({ error: 'Clique em "Buscar cardápio" na loja de origem antes de copiar.' });
+      }
+
+      // 2) Loja de destino no 99Food
+      const destPlat = await pool.query(
+        `SELECT app_shop_id, platform_store_id FROM restaurant_platforms
+         WHERE restaurant_id = $1 AND platform = '99food'`,
+        [to_restaurant_id]
+      );
+      const destShop = destPlat.rows[0]?.app_shop_id || destPlat.rows[0]?.platform_store_id;
+      if (!destShop) {
+        return res.status(400).json({ error: 'A loja de destino não tem 99Food configurado.' });
+      }
+
+      // 3) Monta o pacote (só os itens selecionados) e envia
+      const selectedIds = (selected_items || [])
+        .map(i => String(i?.id ?? i?.app_item_id ?? i?.productId ?? '')).filter(Boolean);
+      const payload = menu99food.buildUploadPayload(cached.raw, selectedIds.length ? selectedIds : null);
+      if (!payload.items.length) {
+        return res.status(400).json({ error: 'Nenhum item selecionado encontrado no cardápio de origem.' });
+      }
+
+      const destToken = await food99.getValidToken(destShop);
+      const uploadResult = await menu99food.uploadMenu(destToken, payload);
+      taskId = uploadResult.taskId || null;
+      console.log(`[menu copy] enviado para loja ${destShop}: ${payload.items.length} item(ns), taskId=${taskId}`);
+    }
+
+    // Registrar a cópia no banco (histórico)
     const result = await pool.query(
       `INSERT INTO menu_copies (from_restaurant_id, to_restaurant_id, from_platform, to_platform, items_copied, copied_at)
        VALUES ($1, $2, $3, $4, $5, NOW())
@@ -139,10 +179,13 @@ router.post('/copy', authenticateToken, requireAdmin, async (req, res) => {
 
     console.log(`[menu copy] Cópia registrada com ID: ${result.rows[0]?.id}`);
 
-    res.json({ 
-      success: true, 
-      message: `${itemsCount} itens copiados com sucesso!`,
+    res.json({
+      success: true,
+      message: to_platform === '99food'
+        ? `${itemsCount} item(ns) enviado(s)! O 99Food processa em segundo plano (~1 min). Confira no painel da loja.`
+        : `${itemsCount} itens registrados.`,
       copied_items: itemsCount,
+      task_id: taskId,
       copy_id: result.rows[0]?.id
     });
   } catch (err) {
