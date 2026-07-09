@@ -66,6 +66,11 @@ router.post('/', async (req, res) => {
       || [[ra.street_name, ra.house_number].filter(Boolean).join(', '), ra.district, ra.city].filter(Boolean).join(' - ')
       || null;
 
+    // Diagnóstico: mostra SE cada campo do KDS veio preenchido (sem expor o valor)
+    console.log(`[99food KDS] endereco:${endereco ? 'ok' : 'vazio'} setor:${ra.district ? 'ok' : 'vazio'} ` +
+      `promessa:${order.expected_arrived_eta ? 'ok' : 'vazio'} obs:${order.remark ? 'ok' : 'vazio'} ` +
+      `tipo:${order.delivery_type} pagto:${order.pay_method}`);
+
     // 2. Salva o pedido com user_id
     await pool.query(
       `INSERT INTO orders (platform, platform_order_id, app_shop_id, status, customer_name, customer_phone, delivery_address, items, total_price, raw_payload, user_id, created_at, updated_at)
