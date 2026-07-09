@@ -35,6 +35,9 @@ router.post('/', async (req, res) => {
       return;
     }
 
+    // LOG TEMPORÁRIO: o pedido completo já vem no aviso (order_info) — sempre disponível
+    console.log(`[99food DEBUG] order_info completo:`, JSON.stringify(orderData).slice(0, 6000));
+
     // Busca os DETALHES completos do pedido (2ª chamada na API) — traz o nome real
     // do cliente, que o aviso do webhook costuma mandar mascarado ("privacy protection").
     let order = orderData;
