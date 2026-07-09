@@ -48,10 +48,11 @@ app.use(cors(allowedOrigins.length > 0
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static('public'));
 
-// Rate limit global (proteção básica contra abuso)
+// Rate limit global (proteção básica contra abuso). Teto alto porque o KDS
+// fica atualizando os pedidos com frequência — limite baixo deixava a tela sem dados.
 app.use('/api/', rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 1000,
+  max: 5000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Muitas requisições. Tente novamente em alguns minutos.' }

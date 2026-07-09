@@ -41,7 +41,7 @@ router.post('/login', async (req, res) => {
 
     const token = jwt.sign(
       { id: user.id, email: user.email, name: user.name, role: user.role, is_admin: user.is_admin, plan: user.plan },
-      JWT_SECRET, { expiresIn: '24h' }
+      JWT_SECRET, { expiresIn: '30d' }
     );
     console.log(`[auth] login: ${user.email} (${user.role}, admin: ${user.is_admin}, plano: ${user.plan})`);
     return res.json({
@@ -81,7 +81,7 @@ router.post('/register', async (req, res) => {
 
     const token = jwt.sign(
       { id: newUser.id, email: newUser.email, name: newUser.name, role: 'user', is_admin: false, plan: 'free' },
-      JWT_SECRET, { expiresIn: '24h' }
+      JWT_SECRET, { expiresIn: '30d' }
     );
 
     console.log(`[auth] registro: ${email}`);
