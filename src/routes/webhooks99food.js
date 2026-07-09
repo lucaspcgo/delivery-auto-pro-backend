@@ -35,8 +35,16 @@ router.post('/', async (req, res) => {
       return;
     }
 
-    // LOG TEMPORÁRIO: o pedido completo já vem no aviso (order_info) — sempre disponível
-    console.log(`[99food DEBUG] order_info completo:`, JSON.stringify(orderData).slice(0, 6000));
+    // TEMPORÁRIO: salva o último pedido num arquivo público para inspeção fácil
+    // (abrir /debug-last-order.json no navegador). Remover depois de mapear o KDS.
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const pubDir = path.join(__dirname, '..', '..', 'public');
+      fs.mkdirSync(pubDir, { recursive: true });
+      fs.writeFileSync(path.join(pubDir, 'debug-last-order.json'), JSON.stringify(orderData, null, 2));
+      console.log('[99food DEBUG] pedido salvo em /debug-last-order.json');
+    } catch (e) { console.warn('[99food DEBUG] não gravou arquivo:', e.message); }
 
     // Busca os DETALHES completos do pedido (2ª chamada na API) — traz o nome real
     // do cliente, que o aviso do webhook costuma mandar mascarado ("privacy protection").
