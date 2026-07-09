@@ -1,10 +1,11 @@
 const pool = require('../db/postgres');
 const { STAGES } = require('./kdsStages');
 
-// Colunas do KDS (etapas). Por padrão mostramos só o essencial da operação:
-//   pendente (aceitar) → aguardando (prontos) → entregando (com o entregador).
-// As demais vêm ocultas; o usuário pode ligá-las em "Configurar colunas".
-const DEFAULT_VISIBLE = new Set(['pendente', 'aguardando', 'entregando']);
+// Colunas do KDS (etapas). Por padrão mostramos TODAS as etapas ativas para que
+// nenhum pedido suma (inclusive os que a automação já aceitou e estão "Aceitos"
+// aguardando o tempo de pronto). Só as etapas finais (entregue/cancelado) vêm
+// ocultas. O usuário pode ajustar em "Configurar colunas".
+const DEFAULT_VISIBLE = new Set(['pendente', 'aceito', 'preparando', 'aguardando', 'entregando', 'no_destino']);
 function defaultColumns() {
   return STAGES.map((s, i) => ({
     key: s.key, label: s.label,
