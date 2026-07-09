@@ -45,7 +45,9 @@ app.use(cors(allowedOrigins.length > 0
   : undefined));
 
 // Limita o tamanho do corpo para mitigar abuso/DoS
-app.use(express.json({ limit: '1mb' }));
+// Guarda o corpo cru (texto) para poder extrair IDs de 64 bits sem perder precisão
+// (JSON.parse arredonda inteiros grandes como o order_id do 99Food).
+app.use(express.json({ limit: '1mb', verify: (req, _res, buf) => { req.rawBody = buf.toString('utf8'); } }));
 app.use(express.static('public'));
 
 // Rate limit global (proteção básica contra abuso). Teto alto porque o KDS

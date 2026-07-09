@@ -13,7 +13,13 @@ router.post('/', async (req, res) => {
   console.log('[99food webhook] recebido:', JSON.stringify(body).substring(0, 200));
 
   try {
-    const orderId = body.order_id || body.orderId || body.data?.order_id || body.data?.order_info?.order_id;
+    // IMPORTANTE: o order_id do 99Food é um inteiro de 64 bits. O JSON.parse do Express
+    // arredonda esses números (ex.: ...419347 vira ...419000), então pegamos os dígitos
+    // EXATOS direto do corpo cru (texto). Só caímos no valor arredondado se não achar.
+    let orderId = null;
+    const rawMatch = typeof req.rawBody === 'string' && req.rawBody.match(/"order_id"\s*:\s*"?(\d+)"?/);
+    if (rawMatch) orderId = rawMatch[1];
+    else orderId = body.order_id || body.orderId || body.data?.order_id || body.data?.order_info?.order_id;
     const appShopId = body.app_shop_id || body.appShopId;
     const orderData = body.data?.order_info || body.data || body;
     if (!orderId || !appShopId) { console.warn('[99food webhook] payload sem order_id ou app_shop_id'); return; }
