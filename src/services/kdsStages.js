@@ -14,9 +14,6 @@ const STAGES = [
   { key: 'no_destino',  label: 'No Destino',  order: 6 },
   { key: 'entregue',    label: 'Entregue',    order: 7 },
   { key: 'cancelado',   label: 'Cancelado',   order: 8 },
-  // Coragem: status não reconhecido cai aqui (visível), para nunca sumir do KDS
-  // e para percebermos códigos novos que ainda precisam ser mapeados.
-  { key: 'outros',      label: 'Outros',      order: 9 },
 ];
 
 // Conjunto de etapas válidas (para validação/fallback no consumo)
@@ -45,10 +42,11 @@ const STATUS_TO_STAGE = {
 };
 
 // Descobre a etapa do KDS a partir do status cru salvo no pedido.
-// Status não reconhecido cai em 'outros' (coluna visível) — nunca some do KDS.
+// Status não reconhecido cai em 'pendente' (pedido novo/actionável) — assim
+// aparece na primeira coluna com o botão "Aceitar", nunca some do KDS.
 function normalizeStage(status) {
   const s = String(status ?? '').trim().toLowerCase();
-  return STATUS_TO_STAGE[s] || 'outros';
+  return STATUS_TO_STAGE[s] || 'pendente';
 }
 
 // Ações manuais (botões) que a LOJA pode comandar em cada etapa. É a fonte da
