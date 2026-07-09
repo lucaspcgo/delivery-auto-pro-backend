@@ -35,28 +35,6 @@ router.post('/', async (req, res) => {
       return;
     }
 
-    // TEMPORÁRIO: salva o último pedido num arquivo público para inspeção fácil
-    // (abrir /debug-last-order.json no navegador). Remover depois de mapear o KDS.
-    try {
-      const fs = require('fs');
-      const path = require('path');
-      // Mascara dados pessoais (nome/telefone) — mantém só a ESTRUTURA dos campos.
-      const safe = JSON.parse(JSON.stringify(orderData));
-      const PII = ['name', 'phone', 'mobile', 'tel', 'contact_name', 'contact_phone', 'receiver_name'];
-      const mask = (o) => {
-        if (!o || typeof o !== 'object') return;
-        for (const k of Object.keys(o)) {
-          if (PII.includes(k.toLowerCase()) && typeof o[k] === 'string') o[k] = '***';
-          else if (o[k] && typeof o[k] === 'object') mask(o[k]);
-        }
-      };
-      mask(safe);
-      const pubDir = path.join(__dirname, '..', '..', 'public');
-      fs.mkdirSync(pubDir, { recursive: true });
-      fs.writeFileSync(path.join(pubDir, 'debug-last-order.json'), JSON.stringify(safe, null, 2), { mode: 0o600 });
-      console.log('[99food DEBUG] pedido salvo em /debug-last-order.json');
-    } catch (e) { console.warn('[99food DEBUG] não gravou arquivo:', e.message); }
-
     // Busca os DETALHES completos do pedido (2ª chamada na API) — traz o nome real
     // do cliente, que o aviso do webhook costuma mandar mascarado ("privacy protection").
     let order = orderData;
@@ -98,6 +76,29 @@ router.post('/', async (req, res) => {
     console.log(`[99food webhook] pedido ${orderId} salvo (loja: ${shopName || appShopId}, user: ${userId})`);
     await tryAutoAccept('99food', orderId, appShopId, userId);
   } catch (err) { console.error('[99food webhook] erro:', err.message); }
+});
+
+// TEMPORÁRIO: mostra a ESTRUTURA do último pedido 99food (nome/telefone/endereço
+// mascarados) para mapear os campos do KDS. Será removido depois.
+router.get('/debug-last', async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT raw_payload FROM orders WHERE platform='99food' ORDER BY created_at DESC LIMIT 1`
+    );
+    if (!r.rows.length) return res.json({ info: 'Nenhum pedido 99food ainda. Faça um pedido de teste.' });
+    let raw = r.rows[0].raw_payload;
+    if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { /* ignora */ } }
+    const PII = ['name', 'phone', 'mobile', 'tel', 'addr', 'contact_name', 'contact_phone', 'receiver_name'];
+    const mask = (o) => {
+      if (!o || typeof o !== 'object') return;
+      for (const k of Object.keys(o)) {
+        if (PII.includes(k.toLowerCase()) && typeof o[k] === 'string') o[k] = '***';
+        else if (o[k] && typeof o[k] === 'object') mask(o[k]);
+      }
+    };
+    mask(raw);
+    res.json(raw);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // GET /orders — requer autenticação
