@@ -137,4 +137,23 @@ async function cancelOrder(authToken, orderId, cancelCode = 1040) {
   return result.data;
 }
 
-module.exports = { refreshToken, getToken, getValidToken, getOrderDetail, confirmOrder, readyOrder, cancelOrder, bindStore };
+// Detalhes da loja (nome, logo, endereço, etc.). Host: openapi.99food.com
+// GET /v1/shop/shop/detail?auth_token=...  → data.name = nome da loja
+function getStoreDetail(authToken) {
+  const path = `/v1/shop/shop/detail?auth_token=${encodeURIComponent(authToken)}`;
+  return new Promise((resolve, reject) => {
+    https.get({ hostname: 'openapi.99food.com', path }, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data); // só usamos `name` (string), sem risco de int 64-bit
+          if (parsed.errno !== 0) return reject(new Error(`[99food] detalhe da loja: ${parsed.errmsg} (errno ${parsed.errno})`));
+          resolve(parsed.data || {});
+        } catch (e) { reject(new Error('resposta inválida (detalhe da loja): ' + data.slice(0, 200))); }
+      });
+    }).on('error', (err) => reject(new Error('falha de rede (detalhe da loja): ' + err.message)));
+  });
+}
+
+module.exports = { refreshToken, getToken, getValidToken, getOrderDetail, confirmOrder, readyOrder, cancelOrder, bindStore, getStoreDetail };

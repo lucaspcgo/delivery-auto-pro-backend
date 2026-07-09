@@ -177,7 +177,19 @@ router.post('/99food/connect-shop', async (req, res) => {
       await food99.getValidToken(app_shop_id);
     }
 
-    const shopName = name || `Loja 99Food ${app_shop_id}`;
+    // Busca o NOME REAL da loja na API do 99Food (se o usuário não passou um nome)
+    let realName = name || null;
+    if (!realName) {
+      try {
+        const token = await food99.getValidToken(app_shop_id);
+        const detail = await food99.getStoreDetail(token);
+        if (detail && detail.name) realName = detail.name;
+        console.log(`[99food connect] nome da loja pela API: ${realName || 'n/d'}`);
+      } catch (e) {
+        console.warn('[99food connect] não obtive o nome da loja:', e.message);
+      }
+    }
+    const shopName = realName || `Loja 99Food ${app_shop_id}`;
 
     // Cria/reaproveita o restaurante desta loja para o usuário
     const existing = await pool.query(
@@ -196,6 +208,11 @@ router.post('/99food/connect-shop', async (req, res) => {
       restaurantId = inserted.rows[0].id;
     } else {
       restaurantId = existing.rows[0].id;
+      // Se conseguimos o nome real, atualiza (corrige nome genérico de conexões antigas)
+      if (realName) {
+        await pool.query(`UPDATE restaurants SET name = $1, updated_at = now() WHERE id = $2`,
+          [realName, restaurantId]);
+      }
     }
 
     await pool.query(
