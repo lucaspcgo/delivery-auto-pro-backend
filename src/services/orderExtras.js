@@ -53,9 +53,16 @@ function fromFood99(raw) {
   const out = {
     payment_method: null, payment_when: null, order_type: null,
     neighborhood: null, promise_time: null, note: null,
-    payment_code: null
+    payment_code: null, order_number: null
   };
   const ra = raw.receive_address || {};
+
+  // Número curto do pedido mostrado na loja (o order_id de 64 bits NÃO é esse número).
+  // O 99Food manda em algum destes campos; pegamos o primeiro que existir.
+  const numCand = raw.order_index ?? raw.order_serial_num ?? raw.serial_number
+    ?? raw.daily_serial ?? raw.order_show_id ?? raw.order_num ?? raw.order_display_num
+    ?? raw.day_seq ?? raw.index;
+  if (numCand != null && String(numCand).trim() !== '') out.order_number = String(numCand).trim();
 
   // Bairro / setor
   out.neighborhood = ra.district || null;

@@ -55,10 +55,14 @@ async function attachItemImages(orders, platform, userId) {
       if (!it || typeof it !== 'object') return it;
       const id = it.app_item_id ?? it.item_id ?? it.id ?? it.sku ?? it.productId;
       const name = it.name ?? it.item_name ?? it.dish_name ?? it.food_name;
-      // Usa SÓ a foto do nosso cardápio (por código ou nome). Ignora a foto que
-      // vem dentro do pedido — no 99Food de teste ela é uma imagem-lixo/errada.
+      // 1º tenta a foto do nosso cardápio salvo (curada). Se não achar, usa a foto
+      // que o próprio 99Food manda no item do pedido REAL (head_img/image/etc.).
+      // No simulador o cardápio salvo vence, evitando a imagem-lixo do pedido de teste.
+      const ownImg = it.head_img || it.image || it.item_head_img || it.food_img || it.img || it.item_img;
+      const ownImgOk = typeof ownImg === 'string' && /^https?:\/\//i.test(ownImg);
       const image = (id != null && byId.get(String(id)))
         || (name && byName.get(norm(name)))
+        || (ownImgOk ? ownImg : null)
         || null;
       if (image) casados++; else { semFoto++; console.log(`[order images] item sem foto (id=${id}, nome=${name})`); }
       return { ...it, image };

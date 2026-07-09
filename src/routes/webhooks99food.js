@@ -56,6 +56,21 @@ router.post('/', async (req, res) => {
     }
     const shopName = order.shop?.shop_name || order.shop_name || order.store?.shop_name || '';
 
+    // DIAGNÓSTICO (temporário): em pedido REAL, mostra os NOMES dos campos (não os valores
+    // sensíveis) pra descobrirmos o campo certo do número do pedido e da foto do item.
+    try {
+      const isMock = /mock/i.test(shopName) || /^didi$/i.test(String(order.receive_address?.name || ''));
+      if (!isMock) {
+        const items = order.order_items || [];
+        const numKeys = Object.keys(order).filter(k => /index|serial|num|seq|show|display/i.test(k));
+        const item0 = items[0] || {};
+        const imgKeys = Object.keys(item0).filter(k => /img|image|photo|head|pic/i.test(k));
+        console.log('[99food diag] chaves numero-pedido:', numKeys.map(k => `${k}=${order[k]}`).join(', ') || 'NENHUMA');
+        console.log('[99food diag] chaves do item[0]:', Object.keys(item0).join(', '));
+        console.log('[99food diag] chaves foto no item:', imgKeys.map(k => `${k}=${item0[k]}`).join(', ') || 'NENHUMA');
+      }
+    } catch (e) { console.warn('[99food diag] falhou:', e.message); }
+
     // Atualiza o NOME do restaurante com o nome real da loja (quando ainda está genérico)
     const nomeAtual = loja.rows[0].name || '';
     if (shopName && (/^Loja\s*99Food/i.test(nomeAtual) || !nomeAtual.trim())) {
