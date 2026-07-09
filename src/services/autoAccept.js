@@ -7,11 +7,26 @@ const ifoodDistributed = require('./ifood-distributed');
 let schemaReady = null;
 function ensureAutomationSchema() {
   if (!schemaReady) {
-    schemaReady = pool.query(
-      `ALTER TABLE automation_rules ADD COLUMN IF NOT EXISTS accept_delay_seconds INTEGER DEFAULT 0`
-    ).catch(err => { schemaReady = null; throw err; });
+    schemaReady = Promise.all([
+      pool.query(`ALTER TABLE automation_rules ADD COLUMN IF NOT EXISTS accept_delay_seconds INTEGER DEFAULT 0`),
+      // Liga/desliga da automação POR LOJA (padrão: ligado)
+      pool.query(`ALTER TABLE restaurant_platforms ADD COLUMN IF NOT EXISTS automation_enabled BOOLEAN DEFAULT true`),
+    ]).catch(err => { schemaReady = null; throw err; });
   }
   return schemaReady;
+}
+
+// Diz se a automação está LIGADA para uma loja específica (padrão: sim).
+async function isStoreAutomationEnabled(platform, storeId, userId) {
+  const r = await pool.query(
+    `SELECT automation_enabled FROM restaurant_platforms
+      WHERE platform = $1 AND user_id = $3
+        AND (app_shop_id = $2 OR platform_merchant_id = $2 OR platform_store_id = $2)
+      LIMIT 1`,
+    [platform, String(storeId), userId]
+  );
+  // Sem registro ou coluna nula = considera LIGADO (não bloqueia por engano)
+  return r.rows.length === 0 || r.rows[0].automation_enabled !== false;
 }
 
 // Aceita automaticamente um pedido conforme a regra de automação DO USUÁRIO dono da loja.
@@ -24,6 +39,12 @@ async function tryAutoAccept(platform, orderId, storeId, userId) {
     }
 
     await ensureAutomationSchema();
+
+    // Respeita o liga/desliga da automação DAQUELA loja
+    if (!(await isStoreAutomationEnabled(platform, storeId, userId))) {
+      console.log(`[auto-accept] automação DESLIGADA para a loja ${storeId} (${platform}) — ignorando pedido ${orderId}`);
+      return false;
+    }
 
     // Busca a regra de auto-aceite DESTE usuário (isolamento por conta)
     const rules = await pool.query(

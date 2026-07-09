@@ -33,6 +33,33 @@ router.post('/test-ifood/:merchant_id', async (req, res) => {
 // Autenticação obrigatória a partir daqui
 router.use(authenticateToken);
 
+// PUT /automation — liga/desliga a automação de UMA loja.
+// (Declarada ANTES de /:id para não ser confundida com um id.)
+// Body: { platform, store_id, enabled }  (store_id = app_shop_id ou merchant id)
+router.put('/automation', async (req, res) => {
+  const { platform, store_id, enabled } = req.body || {};
+  if (!platform || !store_id || typeof enabled === 'undefined') {
+    return res.status(400).json({ error: 'platform, store_id e enabled são obrigatórios' });
+  }
+  const on = enabled === true || enabled === 'true' || enabled === 1 || enabled === '1';
+  try {
+    // Garante que a coluna existe (idempotente)
+    await pool.query(`ALTER TABLE restaurant_platforms ADD COLUMN IF NOT EXISTS automation_enabled BOOLEAN DEFAULT true`);
+    const upd = await pool.query(
+      `UPDATE restaurant_platforms SET automation_enabled = $1, updated_at = now()
+        WHERE platform = $2 AND user_id = $3
+          AND (app_shop_id = $4 OR platform_merchant_id = $4 OR platform_store_id = $4)
+        RETURNING restaurant_id, app_shop_id, platform_merchant_id, automation_enabled`,
+      [on, platform, req.user.id, String(store_id)]
+    );
+    if (upd.rowCount === 0) return res.status(404).json({ error: 'Loja não encontrada para este usuário' });
+    console.log(`[automation] loja ${store_id} (${platform}) automação ${on ? 'LIGADA' : 'DESLIGADA'} (user ${req.user.id})`);
+    return res.json({ success: true, platform, store_id: String(store_id), automation_enabled: on });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /authorize — buscar loja e cadastrar
 router.post('/authorize', async (req, res) => {
   const { platform, platform_id } = req.body;
