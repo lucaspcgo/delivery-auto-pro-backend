@@ -39,7 +39,21 @@ async function refreshOnce() {
         console.log(`[menu-cache] loja ${shopId}: ${items.length} item(ns) atualizados (fotos incluídas)`);
       }
     } catch (err) {
-      console.warn(`[menu-cache] loja ${shopId}: ${err.message}`);
+      // errno 10101 = a loja não está mais autorizada no 99Food (loja de teste
+      // removida, vínculo desfeito, etc.). Desativa o vínculo para não tentar de
+      // novo a cada ciclo (para de poluir o log e economiza chamada).
+      if (/10101/.test(err.message) || /store authorization.*not exist/i.test(err.message)) {
+        try {
+          await pool.query(
+            `UPDATE restaurant_platforms SET status = 'unauthorized', updated_at = NOW()
+             WHERE platform = '99food' AND COALESCE(app_shop_id, platform_store_id) = $1`,
+            [shopId]
+          );
+          console.log(`[menu-cache] loja ${shopId} não autorizada (10101) — vínculo desativado, não será mais tentada`);
+        } catch (e) { console.warn(`[menu-cache] não desativei loja ${shopId}: ${e.message}`); }
+      } else {
+        console.warn(`[menu-cache] loja ${shopId}: ${err.message}`);
+      }
     }
     await new Promise(r => setTimeout(r, ESPACO_ENTRE_LOJAS));
   }
