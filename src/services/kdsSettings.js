@@ -1,12 +1,14 @@
 const pool = require('../db/postgres');
 const { STAGES } = require('./kdsStages');
 
-// Colunas do KDS (etapas). Por padrão as 7 do fluxo ficam visíveis; "cancelado"
-// vem oculto. O usuário pode ocultar/mostrar e reordenar cada coluna.
+// Colunas do KDS (etapas). Por padrão mostramos só o essencial da operação:
+//   pendente (aceitar) → aguardando (prontos) → entregando (com o entregador).
+// As demais vêm ocultas; o usuário pode ligá-las em "Configurar colunas".
+const DEFAULT_VISIBLE = new Set(['pendente', 'aguardando', 'entregando']);
 function defaultColumns() {
   return STAGES.map((s, i) => ({
     key: s.key, label: s.label,
-    visible: s.key !== 'cancelado',
+    visible: DEFAULT_VISIBLE.has(s.key),
     order: i + 1,
   }));
 }
