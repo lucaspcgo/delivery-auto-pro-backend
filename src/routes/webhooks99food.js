@@ -125,16 +125,20 @@ router.post('/', async (req, res) => {
 router.get('/orders', authenticateToken, async (req, res) => {
   try {
     const { date } = req.query;
-    let query = `SELECT id, platform, platform_order_id, app_shop_id, status, customer_name, customer_phone, delivery_address, items, total_price, raw_payload, created_at, updated_at FROM orders WHERE platform='99food' AND user_id=$1`;
+    let query = `SELECT o.id, o.platform, o.platform_order_id, o.app_shop_id, o.status, o.customer_name, o.customer_phone, o.delivery_address, o.items, o.total_price, o.raw_payload, o.created_at, o.updated_at,
+        (SELECT r.name FROM restaurant_platforms rp JOIN restaurants r ON r.id = rp.restaurant_id
+          WHERE rp.platform='99food' AND rp.app_shop_id = o.app_shop_id LIMIT 1) AS store_name
+      FROM orders o
+      WHERE o.platform='99food' AND o.user_id=$1`;
     const params = [req.user.id];
-    if (date) { query += ` AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = $${params.length + 1}`; params.push(date); }
+    if (date) { query += ` AND DATE(o.created_at AT TIME ZONE 'America/Sao_Paulo') = $${params.length + 1}`; params.push(date); }
     // Por padrão o kanban NÃO traz pedidos encerrados (entregue/cancelado).
     // Use ?include_finished=1 para incluir (ex.: relatórios).
     if (req.query.include_finished !== '1' && TERMINAL_RAW_STATUSES.length) {
-      query += ` AND LOWER(status) <> ALL($${params.length + 1}::text[])`;
+      query += ` AND LOWER(o.status) <> ALL($${params.length + 1}::text[])`;
       params.push(TERMINAL_RAW_STATUSES);
     }
-    query += ` ORDER BY created_at DESC LIMIT 100`;
+    query += ` ORDER BY o.created_at DESC LIMIT 100`;
     const result = await pool.query(query, params);
     const orders = await attachItemImages(result.rows, '99food', req.user.id);
     for (const o of orders) {
