@@ -55,8 +55,9 @@ async function attachItemImages(orders, platform, userId) {
       if (!it || typeof it !== 'object') return it;
       const id = it.app_item_id ?? it.item_id ?? it.id ?? it.sku ?? it.productId;
       const name = it.name ?? it.item_name ?? it.dish_name ?? it.food_name;
-      const image = it.image
-        || (id != null && byId.get(String(id)))
+      // Usa SÓ a foto do nosso cardápio (por código ou nome). Ignora a foto que
+      // vem dentro do pedido — no 99Food de teste ela é uma imagem-lixo/errada.
+      const image = (id != null && byId.get(String(id)))
         || (name && byName.get(norm(name)))
         || null;
       if (image) casados++; else { semFoto++; console.log(`[order images] item sem foto (id=${id}, nome=${name})`); }

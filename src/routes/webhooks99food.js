@@ -102,7 +102,10 @@ router.post('/:orderId/confirm', authenticateToken, async (req, res) => {
     await pool.query(`UPDATE orders SET status='confirmed', updated_at=now() WHERE platform='99food' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
     console.log(`[confirm] pedido ${orderId} confirmado (user: ${req.user.id})`);
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error(`[confirm] FALHA ao aceitar pedido ${orderId}: ${err.message}`);
+    return res.status(500).json({ error: 'Não foi possível aceitar o pedido no 99Food', details: err.message });
+  }
 });
 
 // POST /:orderId/cancel — requer autenticação
