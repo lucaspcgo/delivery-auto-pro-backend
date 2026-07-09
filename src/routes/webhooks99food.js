@@ -40,9 +40,20 @@ router.post('/', async (req, res) => {
     try {
       const fs = require('fs');
       const path = require('path');
+      // Mascara dados pessoais (nome/telefone) — mantém só a ESTRUTURA dos campos.
+      const safe = JSON.parse(JSON.stringify(orderData));
+      const PII = ['name', 'phone', 'mobile', 'tel', 'contact_name', 'contact_phone', 'receiver_name'];
+      const mask = (o) => {
+        if (!o || typeof o !== 'object') return;
+        for (const k of Object.keys(o)) {
+          if (PII.includes(k.toLowerCase()) && typeof o[k] === 'string') o[k] = '***';
+          else if (o[k] && typeof o[k] === 'object') mask(o[k]);
+        }
+      };
+      mask(safe);
       const pubDir = path.join(__dirname, '..', '..', 'public');
       fs.mkdirSync(pubDir, { recursive: true });
-      fs.writeFileSync(path.join(pubDir, 'debug-last-order.json'), JSON.stringify(orderData, null, 2));
+      fs.writeFileSync(path.join(pubDir, 'debug-last-order.json'), JSON.stringify(safe, null, 2), { mode: 0o600 });
       console.log('[99food DEBUG] pedido salvo em /debug-last-order.json');
     } catch (e) { console.warn('[99food DEBUG] não gravou arquivo:', e.message); }
 
