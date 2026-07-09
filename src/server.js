@@ -96,6 +96,7 @@ app.use('/api/v1/orders/ifood', webhooksifoodRouter);
 app.use('/api/v1/dashboard', dashboardRouter);
 app.use('/api/v1/automations', automationsRouter);
 app.use('/api/v1/restaurants', restaurantsRouter);
+app.use('/api/v1/tools', require('./routes/tools'));
 app.use('/api/v1/reports', reportsRouter);
 app.use('/api/v1/settings', settingsRouter);
 app.use('/api/v1/admin', adminRouter);
