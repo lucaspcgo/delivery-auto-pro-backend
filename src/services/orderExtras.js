@@ -20,7 +20,27 @@ const IFOOD_TYPE = {
 };
 
 function fromIfood(raw) {
-  const out = { payment_method: null, payment_when: null, order_type: null };
+  const out = {
+    payment_method: null, payment_when: null, order_type: null,
+    neighborhood: null, promise_time: null, note: null, order_number: null
+  };
+
+  // Número curto do pedido mostrado ao lojista (iFood: displayId, ex.: "1234")
+  const disp = raw.displayId ?? raw.display_id;
+  if (disp != null && String(disp).trim() !== '') out.order_number = String(disp).trim();
+
+  // Bairro / setor
+  out.neighborhood = raw.delivery?.deliveryAddress?.neighborhood
+    || raw.deliveryAddress?.neighborhood || null;
+
+  // Observação do cliente
+  const obs = raw.observations || raw.observation || raw.note;
+  if (obs && String(obs).trim()) out.note = String(obs).trim();
+
+  // Promessa: horário previsto de entrega (iFood manda em ISO)
+  const eta = raw.delivery?.deliveryDateTime || raw.deliveryDateTime
+    || raw.preparationStartDateTime || null;
+  if (eta) out.promise_time = horaISO(eta);
 
   // Entrega x retirada
   const t = raw.orderType || raw.orderTiming || raw.type;
@@ -46,6 +66,15 @@ function hora(epochSec) {
   try {
     return new Date(Number(epochSec) * 1000)
       .toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
+  } catch { return null; }
+}
+
+// Formata uma data ISO (ex.: "2026-07-09T20:15:00Z") para HH:mm no fuso de São Paulo
+function horaISO(iso) {
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return null;
+    return d.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
   } catch { return null; }
 }
 
