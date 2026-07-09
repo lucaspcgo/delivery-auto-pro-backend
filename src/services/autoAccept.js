@@ -2,6 +2,18 @@ const pool = require('../db/postgres');
 const food99 = require('./food99');
 const ifoodDistributed = require('./ifood-distributed');
 
+// Garante a coluna do tempo de aceite (idempotente). accept_delay_seconds = quantos
+// segundos esperar ANTES de aceitar o pedido (0 = na hora).
+let schemaReady = null;
+function ensureAutomationSchema() {
+  if (!schemaReady) {
+    schemaReady = pool.query(
+      `ALTER TABLE automation_rules ADD COLUMN IF NOT EXISTS accept_delay_seconds INTEGER DEFAULT 0`
+    ).catch(err => { schemaReady = null; throw err; });
+  }
+  return schemaReady;
+}
+
 // Aceita automaticamente um pedido conforme a regra de automação DO USUÁRIO dono da loja.
 // storeId = app_shop_id (99food) ou merchantId (iFood, guardado em orders.app_shop_id).
 async function tryAutoAccept(platform, orderId, storeId, userId) {
@@ -10,6 +22,8 @@ async function tryAutoAccept(platform, orderId, storeId, userId) {
       console.log(`[auto-accept] sem userId para pedido ${orderId} (${platform}) — ignorando`);
       return false;
     }
+
+    await ensureAutomationSchema();
 
     // Busca a regra de auto-aceite DESTE usuário (isolamento por conta)
     const rules = await pool.query(
@@ -26,11 +40,11 @@ async function tryAutoAccept(platform, orderId, storeId, userId) {
     }
 
     const rule = rules.rows[0];
-    // Aceita imediatamente; marca "pronto" após o tempo configurado (delay_seconds).
-    const delay = 0;
+    // Espera accept_delay_seconds antes de ACEITAR; depois delay_seconds antes de marcar PRONTO.
+    const acceptDelay = (rule.accept_delay_seconds != null ? rule.accept_delay_seconds : 0) * 1000; // padrão: na hora
     const readyDelay = (rule.delay_seconds != null ? rule.delay_seconds : 480) * 1000; // padrão 8 min
 
-    console.log(`[auto-accept] pedido ${orderId} (${platform}, user ${userId}) aceito já; pronto em ${Math.round(readyDelay / 1000)}s`);
+    console.log(`[auto-accept] pedido ${orderId} (${platform}, user ${userId}) aceita em ${Math.round(acceptDelay / 1000)}s; pronto ${Math.round(readyDelay / 1000)}s após aceitar`);
 
     setTimeout(async () => {
       try {
@@ -80,7 +94,7 @@ async function tryAutoAccept(platform, orderId, storeId, userId) {
       } catch (err) {
         console.error(`[auto-accept] erro ao aceitar ${orderId}:`, err.message);
       }
-    }, delay);
+    }, acceptDelay);
 
     return true;
   } catch (err) {
@@ -89,4 +103,4 @@ async function tryAutoAccept(platform, orderId, storeId, userId) {
   }
 }
 
-module.exports = { tryAutoAccept };
+module.exports = { tryAutoAccept, ensureAutomationSchema };

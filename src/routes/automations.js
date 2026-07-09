@@ -1,6 +1,6 @@
 const express = require('express');
 const pool = require('../db/postgres');
-const { tryAutoAccept } = require('../services/autoAccept');
+const { tryAutoAccept, ensureAutomationSchema } = require('../services/autoAccept');
 const { authenticateToken } = require('../middleware/auth');
 const router = express.Router();
 
@@ -22,8 +22,10 @@ router.get('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
-  const { enabled, delay_seconds } = req.body;
+  const { enabled, delay_seconds, accept_delay_seconds } = req.body;
   try {
+    await ensureAutomationSchema();
+
     // Validar ownership
     const check = await pool.query(
       'SELECT * FROM automation_rules WHERE id = $1 AND user_id = $2',
@@ -38,6 +40,7 @@ router.put('/:id', async (req, res) => {
     let idx = 1;
     if (typeof enabled === 'boolean') { fields.push(`enabled = $${idx++}`); values.push(enabled); }
     if (typeof delay_seconds === 'number') { fields.push(`delay_seconds = $${idx++}`); values.push(delay_seconds); }
+    if (typeof accept_delay_seconds === 'number') { fields.push(`accept_delay_seconds = $${idx++}`); values.push(accept_delay_seconds); }
     if (fields.length === 0) return res.status(400).json({ error: 'Nada para atualizar' });
     fields.push(`updated_at = now()`);
     values.push(id);
