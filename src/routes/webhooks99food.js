@@ -78,8 +78,9 @@ router.post('/', async (req, res) => {
   } catch (err) { console.error('[99food webhook] erro:', err.message); }
 });
 
-// TEMPORÁRIO: mostra a ESTRUTURA do último pedido 99food (nome/telefone/endereço
-// mascarados) para mapear os campos do KDS. Será removido depois.
+// TEMPORÁRIO: mostra apenas a ESTRUTURA (nomes dos campos e tipos) do último
+// pedido 99food — SEM valores, portanto sem nenhum dado sensível. Serve só para
+// mapear os campos do KDS. Será removido depois.
 router.get('/debug-last', async (req, res) => {
   try {
     const r = await pool.query(
@@ -88,16 +89,17 @@ router.get('/debug-last', async (req, res) => {
     if (!r.rows.length) return res.json({ info: 'Nenhum pedido 99food ainda. Faça um pedido de teste.' });
     let raw = r.rows[0].raw_payload;
     if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { /* ignora */ } }
-    const PII = ['name', 'phone', 'mobile', 'tel', 'addr', 'contact_name', 'contact_phone', 'receiver_name'];
-    const mask = (o) => {
-      if (!o || typeof o !== 'object') return;
-      for (const k of Object.keys(o)) {
-        if (PII.includes(k.toLowerCase()) && typeof o[k] === 'string') o[k] = '***';
-        else if (o[k] && typeof o[k] === 'object') mask(o[k]);
+    // Retorna só o formato: {chave: tipo}. Nenhum valor real é exposto.
+    const shape = (v) => {
+      if (Array.isArray(v)) return v.length ? [shape(v[0])] : [];
+      if (v && typeof v === 'object') {
+        const o = {};
+        for (const k of Object.keys(v)) o[k] = shape(v[k]);
+        return o;
       }
+      return typeof v; // 'string' | 'number' | 'boolean'
     };
-    mask(raw);
-    res.json(raw);
+    res.json(shape(raw));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
