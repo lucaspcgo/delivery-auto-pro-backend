@@ -5,7 +5,11 @@ const { tryAutoAccept } = require('../services/autoAccept');
 const { attachItemImages } = require('../services/orderImages');
 const { extractOrderExtras } = require('../services/orderExtras');
 const { authenticateToken } = require('../middleware/auth');
+const { makeDebugHandler } = require('./orderDebug');
 const router = express.Router();
+
+// GET /debug — painel de depuração: campos brutos + mapeamento (requer autenticação)
+router.get('/debug', authenticateToken, makeDebugHandler('99food'));
 
 router.post('/', async (req, res) => {
   res.status(200).json({ errno: 0, errmsg: 'ok' });
