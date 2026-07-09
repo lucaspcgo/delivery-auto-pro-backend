@@ -1,4 +1,15 @@
 const pool = require('../db/postgres');
+const { STAGES } = require('./kdsStages');
+
+// Colunas do KDS (etapas). Por padrão as 7 do fluxo ficam visíveis; "cancelado"
+// vem oculto. O usuário pode ocultar/mostrar e reordenar cada coluna.
+function defaultColumns() {
+  return STAGES.map((s, i) => ({
+    key: s.key, label: s.label,
+    visible: s.key !== 'cancelado',
+    order: i + 1,
+  }));
+}
 
 // Catálogo de TODOS os campos que o KDS pode mostrar hoje (iFood + 99Food).
 // group: 'pedido' (dados do pedido) ou 'item' (por item do pedido).
@@ -27,20 +38,32 @@ const AVAILABLE_FIELDS = [
   { key: 'item_price',      label: 'Preço do item',          group: 'item',   default: false },
 ];
 
-// Configuração padrão (mapa campo -> visível)
+// Configuração padrão: quais CAMPOS aparecem no card + quais COLUNAS aparecem no KDS
 function defaultConfig() {
   const fields = {};
   for (const f of AVAILABLE_FIELDS) fields[f.key] = f.default;
-  return { fields };
+  return { fields, columns: defaultColumns() };
 }
 
-// Mantém só chaves conhecidas e valores booleanos (sanitiza a entrada do usuário)
+// Mantém só chaves conhecidas e valores válidos (sanitiza a entrada do usuário)
 function sanitize(input) {
   const cfg = defaultConfig();
   const inFields = (input && typeof input === 'object' && input.fields) || {};
   for (const f of AVAILABLE_FIELDS) {
     if (typeof inFields[f.key] === 'boolean') cfg.fields[f.key] = inFields[f.key];
   }
+
+  // Colunas: aplica visible/order que o usuário mandou, só para chaves conhecidas.
+  const inCols = (input && typeof input === 'object' && Array.isArray(input.columns)) ? input.columns : [];
+  const byKey = new Map(inCols.map(c => [c && c.key, c]));
+  for (const col of cfg.columns) {
+    const c = byKey.get(col.key);
+    if (c) {
+      if (typeof c.visible === 'boolean') col.visible = c.visible;
+      if (Number.isFinite(Number(c.order))) col.order = Number(c.order);
+    }
+  }
+  cfg.columns.sort((a, b) => a.order - b.order);
   return cfg;
 }
 
@@ -64,7 +87,7 @@ async function getSettings(userId) {
   const r = await pool.query('SELECT config FROM kds_settings WHERE user_id = $1', [String(userId)]);
   const saved = r.rows[0]?.config;
   const config = saved ? sanitize(saved) : defaultConfig();
-  return { config, available_fields: AVAILABLE_FIELDS };
+  return { config, available_fields: AVAILABLE_FIELDS, available_columns: STAGES };
 }
 
 // Salva a config do usuário (sanitizada).
@@ -76,7 +99,7 @@ async function saveSettings(userId, input) {
      ON CONFLICT (user_id) DO UPDATE SET config = EXCLUDED.config, updated_at = now()`,
     [String(userId), JSON.stringify(config)]
   );
-  return { config, available_fields: AVAILABLE_FIELDS };
+  return { config, available_fields: AVAILABLE_FIELDS, available_columns: STAGES };
 }
 
 module.exports = { AVAILABLE_FIELDS, defaultConfig, getSettings, saveSettings };

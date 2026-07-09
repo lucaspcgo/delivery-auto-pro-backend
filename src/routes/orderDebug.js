@@ -1,6 +1,7 @@
 const pool = require('../db/postgres');
 const { attachItemImages } = require('../services/orderImages');
 const { extractOrderExtras } = require('../services/orderExtras');
+const { normalizeStage } = require('../services/kdsStages');
 
 // ─── Helpers de comparação ──────────────────────────────────────────────────
 const isEmpty = (v) => v == null || (typeof v === 'string' && v.trim() === '');
@@ -99,6 +100,7 @@ function makeDebugHandler(platform) {
           id: o.id,
           platform_order_id: o.platform_order_id,
           status: o.status,
+          kds_stage: normalizeStage(o.status),
           created_at: o.created_at,
           mapped,
           field_checks: buildFieldChecks(mapped, raw, platform),

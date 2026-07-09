@@ -71,7 +71,23 @@ async function processEvent(event) {
     console.log(`[ifood event] pedido ${orderId} cancelado (user: ${userId})`);
 
   } else {
-    console.log(`[ifood event] tipo ${eventType} ignorado`);
+    // Demais eventos do iFood avançam a ETAPA do pedido no KDS.
+    // Mapa: código do evento → status canônico salvo no pedido.
+    const STAGE_EVENTS = {
+      SEPARATION_STARTED: 'preparing', SPS: 'preparing',
+      SEPARATION_ENDED: 'preparing', SPE: 'preparing',
+      READY_TO_PICKUP: 'ready', RTP: 'ready',
+      DISPATCHED: 'dispatched', DSP: 'dispatched',
+      ARRIVED: 'arrived', ARV: 'arrived',
+      CONCLUDED: 'delivered', CON: 'delivered',
+    };
+    const novoStatus = STAGE_EVENTS[String(eventType).toUpperCase()];
+    if (novoStatus) {
+      await pool.query(`UPDATE orders SET status=$3, updated_at=now() WHERE platform='ifood' AND platform_order_id=$1 AND user_id=$2`, [orderId, userId, novoStatus]);
+      console.log(`[ifood event] pedido ${orderId} avançou para "${novoStatus}" (evento ${eventType})`);
+    } else {
+      console.log(`[ifood event] tipo ${eventType} ignorado`);
+    }
   }
 }
 
