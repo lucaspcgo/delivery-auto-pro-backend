@@ -51,4 +51,34 @@ function normalizeStage(status) {
   return STATUS_TO_STAGE[s] || 'outros';
 }
 
-module.exports = { STAGES, STAGE_KEYS, normalizeStage };
+// Ações manuais (botões) que a LOJA pode comandar em cada etapa. É a fonte da
+// verdade do KDS: o front renderiza exatamente estes botões, sem adivinhar.
+// Rótulos por ação:
+const ACTION_LABELS = {
+  confirm:  'Aceitar',
+  ready:    'Pronto',
+  dispatch: 'Saiu p/ entrega',
+  cancel:   'Cancelar',
+};
+
+function availableActions(platform, stage) {
+  let acts;
+  switch (stage) {
+    case 'pendente':   acts = ['confirm', 'cancel']; break;
+    case 'aceito':     acts = ['ready', 'cancel']; break;
+    case 'preparando': acts = ['ready', 'cancel']; break;
+    // Saiu p/ entrega só existe no iFood (e apenas entrega própria da loja)
+    case 'aguardando': acts = platform === 'ifood' ? ['dispatch', 'cancel'] : ['cancel']; break;
+    // Etapas finais/controladas pela plataforma: sem botões
+    case 'entregando':
+    case 'no_destino':
+    case 'entregue':
+    case 'cancelado':  acts = []; break;
+    // Desconhecido ("outros"): oferece o fluxo manual completo como PLANO B,
+    // pra loja nunca ficar sem "Aceitar"/"Pronto" se a automação falhar.
+    default:           acts = ['confirm', 'ready', 'cancel']; break;
+  }
+  return acts.map(a => ({ action: a, label: ACTION_LABELS[a] }));
+}
+
+module.exports = { STAGES, STAGE_KEYS, normalizeStage, availableActions, ACTION_LABELS };

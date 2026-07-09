@@ -6,7 +6,7 @@ const { attachItemImages } = require('../services/orderImages');
 const { extractOrderExtras } = require('../services/orderExtras');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const { makeDebugHandler } = require('./orderDebug');
-const { normalizeStage } = require('../services/kdsStages');
+const { normalizeStage, availableActions } = require('../services/kdsStages');
 const router = express.Router();
 
 // GET /debug — painel de depuração: campos brutos + mapeamento (SÓ admin)
@@ -134,6 +134,7 @@ router.get('/orders', authenticateToken, async (req, res) => {
     for (const o of orders) {
       Object.assign(o, extractOrderExtras(o.raw_payload, '99food'));
       o.kds_stage = normalizeStage(o.status); // etapa/coluna do KDS
+      o.available_actions = availableActions('99food', o.kds_stage); // botões válidos
       delete o.raw_payload; // não devolve o payload cru (grande)
     }
     return res.json(orders);
