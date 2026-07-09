@@ -35,8 +35,19 @@ router.post('/', async (req, res) => {
       return;
     }
 
-    try { await food99.getValidToken(appShopId); } catch(e) { console.warn('[99food webhook] aviso token:', e.message); }
-    const order = orderData;
+    // Busca os DETALHES completos do pedido (2ª chamada na API) — traz o nome real
+    // do cliente, que o aviso do webhook costuma mandar mascarado ("privacy protection").
+    let order = orderData;
+    try {
+      const authToken = await food99.getValidToken(appShopId);
+      const detail = await food99.getOrderDetail(authToken, orderId);
+      if (detail && typeof detail === 'object') {
+        order = { ...orderData, ...detail }; // detalhes completos por cima do aviso
+        console.log(`[99food webhook] pedido ${orderId} detalhado via API (cliente: ${detail.receive_address?.name || 'n/d'})`);
+      }
+    } catch (e) {
+      console.warn('[99food webhook] não consegui detalhar pedido, usando aviso do webhook:', e.message);
+    }
     const shopName = order.shop?.shop_name || '';
 
     // 2. Salva o pedido com user_id
