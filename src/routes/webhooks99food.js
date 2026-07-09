@@ -111,6 +111,12 @@ router.post('/', async (req, res) => {
     );
     await pool.query(`UPDATE integrations SET orders_count=orders_count+1, last_sync_at=now(), updated_at=now() WHERE platform='99food' AND user_id=$1`, [userId]);
     console.log(`[99food webhook] pedido ${orderId} salvo (loja: ${shopName || appShopId}, user: ${userId})`);
+
+    // DIAGNÓSTICO (temporário): registra o status cru de cada aviso do 99Food para
+    // descobrirmos os códigos de cada etapa (preparo/despacho/entregue). Acompanhe
+    // um pedido real do início ao fim e veja a sequência de códigos aqui.
+    console.log(`[99food status] pedido ${orderId}: status=${order.status} | delivery_type=${order.delivery_type} | fulfillment_mode=${order.fulfillment_mode} -> etapa atual "${normalizeStage(order.status)}"`);
+
     await tryAutoAccept('99food', orderId, appShopId, userId);
   } catch (err) { console.error('[99food webhook] erro:', err.message); }
 });
