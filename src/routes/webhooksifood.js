@@ -99,10 +99,36 @@ router.post('/:orderId/ready', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Acesso negado' });
     }
 
+    await ifoodDistributed.readyToPickup(req.user.id, orderId);
     await pool.query(`UPDATE orders SET status='ready', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
-    console.log(`[ready] pedido ${orderId} marcado como pronto (user: ${req.user.id})`);
+    console.log(`[ifood ready] pedido ${orderId} pronto p/ retirada (user: ${req.user.id})`);
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error(`[ifood ready] FALHA no pedido ${orderId}: ${err.message}`);
+    return res.status(500).json({ error: 'Não foi possível marcar como pronto no iFood', details: err.message });
+  }
+});
+
+// POST /:orderId/dispatch — saiu para entrega (SÓ entrega própria da loja). Requer autenticação.
+router.post('/:orderId/dispatch', authenticateToken, async (req, res) => {
+  const { orderId } = req.params;
+  try {
+    const order = await pool.query(
+      'SELECT * FROM orders WHERE platform = $1 AND platform_order_id = $2 AND user_id = $3',
+      ['ifood', orderId, req.user.id]
+    );
+    if (order.rowCount === 0) {
+      return res.status(403).json({ error: 'Acesso negado' });
+    }
+
+    await ifoodDistributed.dispatchOrder(req.user.id, orderId);
+    await pool.query(`UPDATE orders SET status='dispatched', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
+    console.log(`[ifood dispatch] pedido ${orderId} saiu para entrega (user: ${req.user.id})`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error(`[ifood dispatch] FALHA no pedido ${orderId}: ${err.message}`);
+    return res.status(500).json({ error: 'Não foi possível despachar no iFood (só vale para entrega própria)', details: err.message });
+  }
 });
 
 module.exports = router;

@@ -229,10 +229,17 @@ router.post('/:orderId/ready', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Acesso negado' });
     }
 
+    // Avisa o 99Food que o pedido está pronto (usa o app_shop_id salvo no pedido).
+    const appShopId = req.body?.app_shop_id || order.rows[0].app_shop_id;
+    const authToken = await food99.getValidToken(appShopId);
+    await food99.readyOrder(authToken, orderId);
     await pool.query(`UPDATE orders SET status='ready', updated_at=now() WHERE platform='99food' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
-    console.log(`[ready] pedido ${orderId} marcado como pronto (user: ${req.user.id})`);
+    console.log(`[99food ready] pedido ${orderId} marcado como pronto (user: ${req.user.id})`);
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error(`[99food ready] FALHA no pedido ${orderId}: ${err.message}`);
+    return res.status(500).json({ error: 'Não foi possível marcar como pronto no 99Food', details: err.message });
+  }
 });
 
 module.exports = router;
