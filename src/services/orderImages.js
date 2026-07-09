@@ -11,6 +11,15 @@ async function attachItemImages(orders, platform, userId) {
   if (!Array.isArray(orders) || orders.length === 0) return orders;
 
   const norm = (s) => String(s || '').trim().toLowerCase();
+  // Nome "enxuto" p/ casar promoções: tira quantidade no início ("1 ", "2x ")
+  // e o sufixo de promoção (depois de — , - , + , "por"). "1 MARMITEX GALINHADA
+  // — POR + 19,90..." -> "marmitex galinhada".
+  const nomeBase = (s) => norm(s)
+    .replace(/^\s*\d+\s*x?\s*/i, '')
+    .split(/\s+[—\-+]\s+|\s*—\s*|\s+por\s+/i)[0]
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   const parse = (v) => {
     if (Array.isArray(v)) return v;
     if (typeof v === 'string') { try { return JSON.parse(v); } catch { return []; } }
@@ -20,6 +29,7 @@ async function attachItemImages(orders, platform, userId) {
   // Monta os mapas de foto (por código e por nome) a partir dos cardápios salvos
   const byId = new Map();
   const byName = new Map();
+  const byBase = new Map(); // nome base -> imagem (casa promoções/combos)
   try {
     const menus = await pool.query(
       `SELECT mi.items_data FROM menu_items mi
@@ -32,8 +42,12 @@ async function attachItemImages(orders, platform, userId) {
         const img = it && (it.image || it.head_img);
         if (!img) continue;
         const id = it.id ?? it.app_item_id ?? it.productId;
-        if (id != null) byId.set(String(id), img);
-        if (it.name) byName.set(norm(it.name), img);
+        if (id != null && String(id) !== '') byId.set(String(id), img);
+        if (it.name) {
+          byName.set(norm(it.name), img);
+          const base = nomeBase(it.name);
+          if (base && base.length >= 4 && !byBase.has(base)) byBase.set(base, img);
+        }
       }
     }
   } catch (err) {
@@ -53,17 +67,26 @@ async function attachItemImages(orders, platform, userId) {
     if (!Array.isArray(items)) continue;
     o.items = items.map((it) => {
       if (!it || typeof it !== 'object') return it;
-      const id = it.app_item_id ?? it.item_id ?? it.id ?? it.sku ?? it.productId;
+      const id = it.app_item_id ?? it.item_id ?? it.id ?? it.sku ?? it.productId ?? it.mdu_id;
       const name = it.name ?? it.item_name ?? it.dish_name ?? it.food_name;
-      // 1º tenta a foto do nosso cardápio salvo (curada). Se não achar, usa a foto
-      // que o próprio 99Food manda no item do pedido REAL (head_img/image/etc.).
-      // No simulador o cardápio salvo vence, evitando a imagem-lixo do pedido de teste.
-      const ownImg = it.head_img || it.image || it.item_head_img || it.food_img || it.img || it.item_img;
-      const ownImgOk = typeof ownImg === 'string' && /^https?:\/\//i.test(ownImg);
-      const image = (id != null && byId.get(String(id)))
+      // Casa a foto do cardápio salvo, nesta ordem:
+      //   1) por código (app_item_id)  2) por nome exato
+      //   3) por "nome base" (ignora quantidade/promoção — ex.: combos)
+      //   4) por "contém" (nome do cardápio dentro do nome do pedido)
+      //   5) por último, a foto que o 99Food manda no próprio item do pedido
+      const idOk = id != null && String(id) !== '';
+      const base = nomeBase(name);
+      let image = (idOk && byId.get(String(id)))
         || (name && byName.get(norm(name)))
-        || (ownImgOk ? ownImg : null)
+        || (base && byBase.get(base))
         || null;
+      if (!image && base && base.length >= 4) {
+        for (const [b, img] of byBase) { if (base.includes(b) || b.includes(base)) { image = img; break; } }
+      }
+      if (!image) {
+        const ownImg = it.head_img || it.image || it.item_head_img || it.food_img || it.img || it.item_img;
+        if (typeof ownImg === 'string' && /^https?:\/\//i.test(ownImg)) image = ownImg;
+      }
       if (image) casados++; else { semFoto++; console.log(`[order images] item sem foto (id=${id}, nome=${name})`); }
       return { ...it, image };
     });
