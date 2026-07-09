@@ -63,7 +63,10 @@ function sanitize(input) {
       if (Number.isFinite(Number(c.order))) col.order = Number(c.order);
     }
   }
+  // Ordena pela ordem pedida e REatribui 1..N para garantir índices únicos e
+  // consistentes (mesmo que o usuário mande orders repetidos ou com buracos).
   cfg.columns.sort((a, b) => a.order - b.order);
+  cfg.columns.forEach((col, i) => { col.order = i + 1; });
   return cfg;
 }
 
