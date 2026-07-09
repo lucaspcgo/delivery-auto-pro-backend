@@ -35,12 +35,17 @@ router.put('/:id', async (req, res) => {
       return res.status(403).json({ error: 'Acesso negado' });
     }
 
+    // Aceita número OU texto ("30") — o front costuma mandar como string
+    const asNum = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+    const asBool = (v) => (typeof v === 'boolean' ? v : (v === 'true' ? true : (v === 'false' ? false : null)));
+
     const fields = [];
     const values = [];
     let idx = 1;
-    if (typeof enabled === 'boolean') { fields.push(`enabled = $${idx++}`); values.push(enabled); }
-    if (typeof delay_seconds === 'number') { fields.push(`delay_seconds = $${idx++}`); values.push(delay_seconds); }
-    if (typeof accept_delay_seconds === 'number') { fields.push(`accept_delay_seconds = $${idx++}`); values.push(accept_delay_seconds); }
+    const enabledVal = asBool(enabled);
+    if (enabledVal !== null) { fields.push(`enabled = $${idx++}`); values.push(enabledVal); }
+    if (delay_seconds != null && asNum(delay_seconds) != null) { fields.push(`delay_seconds = $${idx++}`); values.push(asNum(delay_seconds)); }
+    if (accept_delay_seconds != null && asNum(accept_delay_seconds) != null) { fields.push(`accept_delay_seconds = $${idx++}`); values.push(asNum(accept_delay_seconds)); }
     if (fields.length === 0) return res.status(400).json({ error: 'Nada para atualizar' });
     fields.push(`updated_at = now()`);
     values.push(id);
@@ -51,10 +56,10 @@ router.put('/:id', async (req, res) => {
     );
     if (result.rowCount === 0) return res.status(404).json({ error: 'Regra não encontrada' });
     const rule = result.rows[0];
-    console.log(`[automations] regra ${id} atualizada: enabled=${rule.enabled}, delay=${rule.delay_seconds}`);
+    console.log(`[automations] regra ${id} atualizada: enabled=${rule.enabled}, aceite=${rule.accept_delay_seconds}s, pronto=${rule.delay_seconds}s`);
 
     // Se acabou de ativar, aceitar todos os pedidos NOVOS pendentes
-    if (enabled === true && rule.action === 'auto_accept') {
+    if (enabledVal === true && rule.action === 'auto_accept') {
       const platforms = rule.platform === 'all'
         ? ['ifood', '99food', 'keeta']
         : [rule.platform];
