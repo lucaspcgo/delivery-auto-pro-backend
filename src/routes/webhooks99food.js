@@ -6,7 +6,7 @@ const { attachItemImages } = require('../services/orderImages');
 const { extractOrderExtras } = require('../services/orderExtras');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const { makeDebugHandler } = require('./orderDebug');
-const { normalizeStage, availableActions } = require('../services/kdsStages');
+const { normalizeStage, availableActions, TERMINAL_RAW_STATUSES } = require('../services/kdsStages');
 const router = express.Router();
 
 // GET /debug — painel de depuração: campos brutos + mapeamento (SÓ admin)
@@ -127,7 +127,13 @@ router.get('/orders', authenticateToken, async (req, res) => {
     const { date } = req.query;
     let query = `SELECT id, platform, platform_order_id, app_shop_id, status, customer_name, customer_phone, delivery_address, items, total_price, raw_payload, created_at, updated_at FROM orders WHERE platform='99food' AND user_id=$1`;
     const params = [req.user.id];
-    if (date) { query += ` AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = $2`; params.push(date); }
+    if (date) { query += ` AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = $${params.length + 1}`; params.push(date); }
+    // Por padrão o kanban NÃO traz pedidos encerrados (entregue/cancelado).
+    // Use ?include_finished=1 para incluir (ex.: relatórios).
+    if (req.query.include_finished !== '1' && TERMINAL_RAW_STATUSES.length) {
+      query += ` AND LOWER(status) <> ALL($${params.length + 1}::text[])`;
+      params.push(TERMINAL_RAW_STATUSES);
+    }
     query += ` ORDER BY created_at DESC LIMIT 100`;
     const result = await pool.query(query, params);
     const orders = await attachItemImages(result.rows, '99food', req.user.id);

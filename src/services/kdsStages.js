@@ -19,6 +19,9 @@ const STAGES = [
 // Conjunto de etapas válidas (para validação/fallback no consumo)
 const STAGE_KEYS = new Set(STAGES.map(s => s.key));
 
+// Etapas finais (pedido encerrado — sai do kanban por padrão)
+const TERMINAL_STAGES = new Set(['entregue', 'cancelado']);
+
 // Mapa: valor de status cru (minúsculo) → etapa. Cobre os valores das duas
 // plataformas e os apelidos curtos do iFood (PLC, CFM, RTP, DSP, CON...).
 const STATUS_TO_STAGE = {
@@ -40,6 +43,17 @@ const STATUS_TO_STAGE = {
   // Cancelado
   'cancelled': 'cancelado', 'canceled': 'cancelado', 'can': 'cancelado', 'cancellation_requested': 'cancelado',
 };
+
+// Lista de valores de status CRUS que representam etapa final (entregue/cancelado).
+// Usada para filtrar no SQL sem depender do JS. Em minúsculo.
+const TERMINAL_RAW_STATUSES = Object.entries(STATUS_TO_STAGE)
+  .filter(([, stage]) => TERMINAL_STAGES.has(stage))
+  .map(([raw]) => raw);
+
+// Diz se um status cru representa pedido encerrado (etapa final).
+function isTerminalStatus(status) {
+  return TERMINAL_STAGES.has(normalizeStage(status));
+}
 
 // Descobre a etapa do KDS a partir do status cru salvo no pedido.
 // Status não reconhecido cai em 'pendente' (pedido novo/actionável) — assim
@@ -79,4 +93,4 @@ function availableActions(platform, stage) {
   return acts.map(a => ({ action: a, label: ACTION_LABELS[a] }));
 }
 
-module.exports = { STAGES, STAGE_KEYS, normalizeStage, availableActions, ACTION_LABELS };
+module.exports = { STAGES, STAGE_KEYS, TERMINAL_STAGES, TERMINAL_RAW_STATUSES, isTerminalStatus, normalizeStage, availableActions, ACTION_LABELS };
