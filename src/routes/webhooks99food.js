@@ -44,6 +44,8 @@ router.post('/', async (req, res) => {
       if (detail && typeof detail === 'object') {
         order = { ...orderData, ...detail }; // detalhes completos por cima do aviso
         console.log(`[99food webhook] pedido ${orderId} detalhado via API (cliente: ${detail.receive_address?.name || 'n/d'})`);
+        // LOG TEMPORÁRIO: estrutura completa do pedido (para mapear campos do KDS)
+        console.log(`[99food DEBUG] pedido completo:`, JSON.stringify(detail).slice(0, 4000));
       }
     } catch (e) {
       console.warn('[99food webhook] não consegui detalhar pedido, usando aviso do webhook:', e.message);
