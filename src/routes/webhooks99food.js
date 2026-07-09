@@ -48,7 +48,17 @@ router.post('/', async (req, res) => {
     } catch (e) {
       console.warn('[99food webhook] não consegui detalhar pedido, usando aviso do webhook:', e.message);
     }
-    const shopName = order.shop?.shop_name || '';
+    const shopName = order.shop?.shop_name || order.shop_name || order.store?.shop_name || '';
+
+    // Atualiza o NOME do restaurante com o nome real da loja (quando ainda está genérico)
+    const nomeAtual = loja.rows[0].name || '';
+    if (shopName && (/^Loja\s*99Food/i.test(nomeAtual) || !nomeAtual.trim())) {
+      try {
+        await pool.query(`UPDATE restaurants SET name = $1, updated_at = now() WHERE id = $2`,
+          [shopName, loja.rows[0].restaurant_id]);
+        console.log(`[99food webhook] nome do restaurante atualizado para "${shopName}"`);
+      } catch (e) { console.warn('[99food webhook] não atualizou nome:', e.message); }
+    }
 
     // 2. Salva o pedido com user_id
     await pool.query(
