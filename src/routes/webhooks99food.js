@@ -85,11 +85,18 @@ router.post('/', async (req, res) => {
       } catch (e) { console.warn('[99food webhook] não atualizou nome:', e.message); }
     }
 
-    // Monta o endereço a partir dos campos reais (o campo `addr` não existe no 99Food)
+    // Monta o endereço a partir dos campos reais (o campo `addr` não existe no 99Food).
+    // Vários campos vêm com "privacy protection" (mascarados) — descartamos esses.
     const ra = order.receive_address || {};
-    const endereco = ra.poi_address
-      || [[ra.street_name, ra.house_number].filter(Boolean).join(', '), ra.district, ra.city].filter(Boolean).join(' - ')
+    const semMascara = (s) => (s && !/privacy protection/i.test(String(s)) ? String(s).trim() : '');
+    const endereco = semMascara(ra.poi_address)
+      || [[semMascara(ra.street_name), semMascara(ra.house_number)].filter(Boolean).join(', '), semMascara(ra.district), semMascara(ra.city)].filter(Boolean).join(' - ')
       || null;
+
+    // Nome do cliente: receive_address.name costuma vir "privacy protection".
+    // O nome real fica em first_name/last_name — montamos a partir deles.
+    const nomeCliente = [semMascara(ra.first_name), semMascara(ra.last_name)].filter(Boolean).join(' ')
+      || semMascara(ra.name) || null;
 
     // 2. Salva o pedido com user_id
     await pool.query(
@@ -97,7 +104,7 @@ router.post('/', async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now(),now())
        ON CONFLICT (platform, platform_order_id) DO UPDATE SET status=EXCLUDED.status, raw_payload=EXCLUDED.raw_payload, updated_at=now()`,
       ['99food', String(orderId), appShopId, String(order.status || 100),
-       ra.name || null, ra.phone || null,
+       nomeCliente, ra.phone || null,
        endereco, JSON.stringify(order.order_items || []),
        (order.price?.real_pay_price || order.price?.order_price || 0) / 100, JSON.stringify(order), userId]
     );
