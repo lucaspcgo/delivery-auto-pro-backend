@@ -135,6 +135,30 @@ router.post('/:orderId/confirm', authenticateToken, async (req, res) => {
   }
 });
 
+// POST /:orderId/pay-confirm — confirma recebimento do pagamento em dinheiro (requer autenticação)
+router.post('/:orderId/pay-confirm', authenticateToken, async (req, res) => {
+  const { orderId } = req.params;
+  const { app_shop_id } = req.body;
+  if (!app_shop_id) return res.status(400).json({ error: 'app_shop_id é obrigatório' });
+  try {
+    const order = await pool.query(
+      'SELECT * FROM orders WHERE platform = $1 AND platform_order_id = $2 AND user_id = $3',
+      ['99food', orderId, req.user.id]
+    );
+    if (order.rowCount === 0) {
+      return res.status(403).json({ error: 'Acesso negado' });
+    }
+
+    const authToken = await food99.getValidToken(app_shop_id);
+    await food99.payConfirm(authToken, orderId);
+    console.log(`[pay-confirm] pagamento em dinheiro confirmado no pedido ${orderId} (user: ${req.user.id})`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error(`[pay-confirm] FALHA no pedido ${orderId}: ${err.message}`);
+    return res.status(500).json({ error: 'Não foi possível confirmar o pagamento em dinheiro no 99Food', details: err.message });
+  }
+});
+
 // POST /:orderId/cancel — requer autenticação
 router.post('/:orderId/cancel', authenticateToken, async (req, res) => {
   const { orderId } = req.params;

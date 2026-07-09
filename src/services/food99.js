@@ -137,6 +137,17 @@ async function cancelOrder(authToken, orderId, cancelCode = 1040) {
   return result.data;
 }
 
+// Confirma o recebimento do pagamento EM DINHEIRO adiantado pelo entregador da 99Food.
+// Só vale quando: entrega é da plataforma (não do lojista), status=200 (aceito) e
+// pagamento em dinheiro. Host: openapi.99food.com. order_id é long (64 bits) → mando cru.
+async function payConfirm(authToken, orderId) {
+  if (!/^\d+$/.test(String(orderId))) throw new Error('order_id inválido (apenas números)');
+  const rawBody = `{"auth_token":${JSON.stringify(String(authToken))},"order_id":${orderId}}`;
+  const result = await postRaw99('/v1/order/order/payConfirm', rawBody);
+  if (result.errno !== 0) throw new Error(`[99food] Erro ao confirmar pagamento em dinheiro: ${JSON.stringify(result)}`);
+  return result.data;
+}
+
 // Detalhes da loja (nome, logo, endereço, etc.). Host: openapi.99food.com
 // GET /v1/shop/shop/detail?auth_token=...  → data.name = nome da loja
 function getStoreDetail(authToken) {
@@ -156,4 +167,4 @@ function getStoreDetail(authToken) {
   });
 }
 
-module.exports = { refreshToken, getToken, getValidToken, getOrderDetail, confirmOrder, readyOrder, cancelOrder, bindStore, getStoreDetail };
+module.exports = { refreshToken, getToken, getValidToken, getOrderDetail, confirmOrder, readyOrder, cancelOrder, payConfirm, bindStore, getStoreDetail };
