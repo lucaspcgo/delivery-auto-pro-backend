@@ -168,4 +168,14 @@ router.put('/kds', async (req, res) => {
   }
 });
 
+// POST /api/v1/settings/kds/reset — restaura a configuração padrão do KDS
+router.post('/kds/reset', async (req, res) => {
+  try {
+    const data = await kdsSettings.resetSettings(req.user.id);
+    return res.json({ success: true, ...data });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

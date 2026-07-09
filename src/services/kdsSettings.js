@@ -107,4 +107,16 @@ async function saveSettings(userId, input) {
   return { config, available_fields: AVAILABLE_FIELDS, available_columns: STAGES };
 }
 
-module.exports = { AVAILABLE_FIELDS, defaultConfig, getSettings, saveSettings };
+// Restaura a configuração padrão do usuário (campos + colunas).
+async function resetSettings(userId) {
+  await ensureSchema();
+  const config = defaultConfig();
+  await pool.query(
+    `INSERT INTO kds_settings (user_id, config, updated_at) VALUES ($1, $2, now())
+     ON CONFLICT (user_id) DO UPDATE SET config = EXCLUDED.config, updated_at = now()`,
+    [String(userId), JSON.stringify(config)]
+  );
+  return { config, available_fields: AVAILABLE_FIELDS, available_columns: STAGES };
+}
+
+module.exports = { AVAILABLE_FIELDS, defaultConfig, getSettings, saveSettings, resetSettings };
