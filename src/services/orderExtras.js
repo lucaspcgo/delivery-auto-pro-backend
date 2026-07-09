@@ -82,9 +82,20 @@ function fromFood99(raw) {
   const out = {
     payment_method: null, payment_when: null, order_type: null,
     neighborhood: null, promise_time: null, note: null,
-    payment_code: null, order_number: null
+    payment_code: null, order_number: null,
+    courier_name: null, courier_phone: null, pickup_code: null, promise_epoch: null
   };
   const ra = raw.receive_address || {};
+
+  // Entregador/parceiro (99Food: shopper_info) — vem vazio até ser designado.
+  const sp = raw.shopper_info || raw.courier || {};
+  const cName = String(sp.name || '').trim();
+  const cPhone = String(sp.phone || '').trim();
+  if (cName) out.courier_name = cName;
+  if (cPhone) out.courier_phone = cPhone;
+
+  // Código de retirada mostrado ao entregador (útil no card)
+  out.pickup_code = raw.pickup_code || raw.takeaway_code || raw.handover_code || null;
 
   // Número curto do pedido mostrado na loja (o order_id de 64 bits NÃO é esse número).
   // O 99Food manda em algum destes campos; pegamos o primeiro que existir.
@@ -101,7 +112,7 @@ function fromFood99(raw) {
 
   // Promessa: horário esperado de chegada (ou ETA de entrega)
   const eta = raw.expected_arrived_eta || raw.delivery_eta;
-  if (eta) out.promise_time = hora(eta);
+  if (eta) { out.promise_time = hora(eta); out.promise_epoch = Number(eta) * 1000; }
 
   // Tipo de entrega (99Food manda código numérico em delivery_type)
   if (raw.delivery_type != null) {
