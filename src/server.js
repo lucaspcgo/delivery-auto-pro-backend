@@ -119,4 +119,10 @@ app.listen(PORT, () => {
   } catch (err) {
     console.error('[server] falha ao iniciar atualização de cardápio:', err.message);
   }
+  // Sincroniza o status dos pedidos 99Food com a plataforma (tira concluídos do KDS)
+  try {
+    require('./services/orderStatusPoller').startOrderStatusPolling();
+  } catch (err) {
+    console.error('[server] falha ao iniciar sincronização de status:', err.message);
+  }
 });
