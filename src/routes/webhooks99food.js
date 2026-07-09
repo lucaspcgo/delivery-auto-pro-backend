@@ -43,9 +43,7 @@ router.post('/', async (req, res) => {
       const detail = await food99.getOrderDetail(authToken, orderId);
       if (detail && typeof detail === 'object') {
         order = { ...orderData, ...detail }; // detalhes completos por cima do aviso
-        console.log(`[99food webhook] pedido ${orderId} detalhado via API (cliente: ${detail.receive_address?.name || 'n/d'})`);
-        // LOG TEMPORÁRIO: estrutura completa do pedido (para mapear campos do KDS)
-        console.log(`[99food DEBUG] pedido completo:`, JSON.stringify(detail).slice(0, 4000));
+        console.log(`[99food webhook] pedido ${orderId} detalhado via API`);
       }
     } catch (e) {
       console.warn('[99food webhook] não consegui detalhar pedido, usando aviso do webhook:', e.message);
@@ -62,45 +60,26 @@ router.post('/', async (req, res) => {
       } catch (e) { console.warn('[99food webhook] não atualizou nome:', e.message); }
     }
 
+    // Monta o endereço a partir dos campos reais (o campo `addr` não existe no 99Food)
+    const ra = order.receive_address || {};
+    const endereco = ra.poi_address
+      || [[ra.street_name, ra.house_number].filter(Boolean).join(', '), ra.district, ra.city].filter(Boolean).join(' - ')
+      || null;
+
     // 2. Salva o pedido com user_id
     await pool.query(
       `INSERT INTO orders (platform, platform_order_id, app_shop_id, status, customer_name, customer_phone, delivery_address, items, total_price, raw_payload, user_id, created_at, updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now(),now())
        ON CONFLICT (platform, platform_order_id) DO UPDATE SET status=EXCLUDED.status, raw_payload=EXCLUDED.raw_payload, updated_at=now()`,
       ['99food', String(orderId), appShopId, String(order.status || 100),
-       order.receive_address?.name || null, order.receive_address?.phone || null,
-       order.receive_address?.addr || null, JSON.stringify(order.order_items || []),
-       (order.price?.actual_amount || order.price?.order_price || 0) / 100, JSON.stringify(order), userId]
+       ra.name || null, ra.phone || null,
+       endereco, JSON.stringify(order.order_items || []),
+       (order.price?.real_pay_price || order.price?.order_price || 0) / 100, JSON.stringify(order), userId]
     );
     await pool.query(`UPDATE integrations SET orders_count=orders_count+1, last_sync_at=now(), updated_at=now() WHERE platform='99food' AND user_id=$1`, [userId]);
     console.log(`[99food webhook] pedido ${orderId} salvo (loja: ${shopName || appShopId}, user: ${userId})`);
     await tryAutoAccept('99food', orderId, appShopId, userId);
   } catch (err) { console.error('[99food webhook] erro:', err.message); }
-});
-
-// TEMPORÁRIO: mostra apenas a ESTRUTURA (nomes dos campos e tipos) do último
-// pedido 99food — SEM valores, portanto sem nenhum dado sensível. Serve só para
-// mapear os campos do KDS. Será removido depois.
-router.get('/debug-last', async (req, res) => {
-  try {
-    const r = await pool.query(
-      `SELECT raw_payload FROM orders WHERE platform='99food' ORDER BY created_at DESC LIMIT 1`
-    );
-    if (!r.rows.length) return res.json({ info: 'Nenhum pedido 99food ainda. Faça um pedido de teste.' });
-    let raw = r.rows[0].raw_payload;
-    if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { /* ignora */ } }
-    // Retorna só o formato: {chave: tipo}. Nenhum valor real é exposto.
-    const shape = (v) => {
-      if (Array.isArray(v)) return v.length ? [shape(v[0])] : [];
-      if (v && typeof v === 'object') {
-        const o = {};
-        for (const k of Object.keys(v)) o[k] = shape(v[k]);
-        return o;
-      }
-      return typeof v; // 'string' | 'number' | 'boolean'
-    };
-    res.json(shape(raw));
-  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // GET /orders — requer autenticação

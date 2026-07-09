@@ -41,26 +41,43 @@ function fromIfood(raw) {
   return out;
 }
 
+// Formata epoch (segundos) para HH:mm no fuso de São Paulo
+function hora(epochSec) {
+  try {
+    return new Date(Number(epochSec) * 1000)
+      .toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
+  } catch { return null; }
+}
+
 function fromFood99(raw) {
-  const out = { payment_method: null, payment_when: null, order_type: null };
+  const out = {
+    payment_method: null, payment_when: null, order_type: null,
+    neighborhood: null, promise_time: null, note: null,
+    payment_code: null
+  };
+  const ra = raw.receive_address || {};
 
-  // Entrega x retirada (campos possíveis do 99Food)
-  const t = raw.order_type ?? raw.delivery_type ?? raw.shipping_type ?? raw.business_type;
-  if (t != null && t !== '') {
-    const s = String(t).toLowerCase();
-    if (s.includes('pick') || s.includes('self') || s === '2') out.order_type = 'Retirada';
-    else if (s.includes('deliver') || s === '1') out.order_type = 'Entrega';
-    else out.order_type = String(t);
+  // Bairro / setor
+  out.neighborhood = ra.district || null;
+
+  // Observação do cliente
+  if (raw.remark && String(raw.remark).trim()) out.note = String(raw.remark).trim();
+
+  // Promessa: horário esperado de chegada (ou ETA de entrega)
+  const eta = raw.expected_arrived_eta || raw.delivery_eta;
+  if (eta) out.promise_time = hora(eta);
+
+  // Tipo de entrega (99Food manda código numérico em delivery_type)
+  if (raw.delivery_type != null) {
+    const dt = Number(raw.delivery_type);
+    out.order_type = dt === 2 ? 'Retirada' : 'Entrega'; // padrão: entrega
   }
 
-  // Pagamento (campos possíveis)
-  const pay = raw.pay_type ?? raw.payment_type ?? raw.payment_method ?? raw.price?.pay_type;
-  if (pay != null && pay !== '') {
-    const s = String(pay).toLowerCase();
-    if (s.includes('online') || s.includes('prepaid') || s === '1') out.payment_when = 'Pago online';
-    else if (s.includes('cash') || s.includes('delivery') || s === '2') out.payment_when = 'Pagar na entrega';
-    out.payment_method = String(raw.pay_type_name ?? raw.payment_name ?? pay);
-  }
+  // Pagamento vem como código (pay_method/pay_type). Guardamos o código;
+  // o nome ("Dinheiro/Crédito") depende da tabela de códigos do 99Food.
+  const payCode = raw.pay_method ?? raw.pay_type;
+  if (payCode != null) out.payment_code = Number(payCode);
+
   return out;
 }
 
