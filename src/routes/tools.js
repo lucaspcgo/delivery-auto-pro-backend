@@ -79,4 +79,63 @@ router.get('/store', async (req, res) => {
   }
 });
 
+// POST /api/v1/tools/99food/check-store — verifica se o usuário TEM ACESSO à loja
+// (via API do 99Food) e devolve o nome real, SEM conectar ainda. A permissão é
+// validada pelo próprio 99Food: se o bind/detalhe funciona, há acesso.
+// Body: { store_id }
+router.post('/99food/check-store', async (req, res) => {
+  const storeId = String(req.body.store_id || req.body.app_shop_id || '').trim();
+  if (!storeId) return res.status(400).json({ error: 'store_id é obrigatório' });
+  if (!/^\d+$/.test(storeId)) return res.status(400).json({ error: 'store_id deve conter apenas números' });
+
+  try {
+    // Já conectada nesta conta?
+    const existing = await pool.query(
+      `SELECT r.name FROM restaurant_platforms rp JOIN restaurants r ON r.id = rp.restaurant_id
+        WHERE rp.platform='99food' AND rp.app_shop_id=$1 AND r.user_id=$2 LIMIT 1`,
+      [storeId, req.user.id]
+    );
+    const alreadyConnected = existing.rowCount > 0;
+
+    // Tenta obter token (fazendo bind se ainda não estiver vinculada)
+    try {
+      await food99.getValidToken(storeId);
+    } catch (notBound) {
+      await food99.bindStore(storeId, storeId);
+      await food99.getValidToken(storeId);
+    }
+
+    // Se chegou aqui, o 99Food deu acesso — busca o nome real da loja
+    const token = await food99.getValidToken(storeId);
+    const detail = await food99.getStoreDetail(token);
+    const name = detail?.name || detail?.shop_name || null;
+
+    return res.json({
+      store_id: storeId,
+      has_access: true,
+      name,
+      already_connected: alreadyConnected,
+      message: alreadyConnected ? 'Loja já conectada nesta conta.' : 'Acesso confirmado. Pronta para autorizar.',
+    });
+  } catch (err) {
+    const semAcesso = /10101/.test(err.message) || /authorization.*not exist/i.test(err.message);
+    return res.status(semAcesso ? 403 : 500).json({
+      store_id: storeId,
+      has_access: false,
+      error: semAcesso
+        ? 'Você não tem permissão nesta loja no 99Food (ou o ID está errado).'
+        : 'Não foi possível verificar a loja agora.',
+      details: err.message,
+    });
+  }
+});
+
+// GET /api/v1/tools/99food/panel-url — URL do painel do 99Food (para abrir em popup
+// e o lojista copiar o ID da loja). Apenas informativo — não lemos a sessão.
+router.get('/99food/panel-url', (req, res) => {
+  const url = process.env.FOOD99_PANEL_URL
+    || 'https://page.didiglobal.com/pc-login-page/4.0.0/index.html?source=200108&appid=200108&role=13&country_id=76&theme=yellow&lang=pt-BR&redirectUrl=https%3A%2F%2Fb.99app.com%2Fpassport%2Fpassport%2FsetCookieV2%3FjumpPage%3Dhttps%253A%252F%252Fmerchant.99app.com%252Fpt-BR%252Fmanager%252Fstore#/';
+  return res.json({ url });
+});
+
 module.exports = router;
