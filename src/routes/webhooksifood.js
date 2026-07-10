@@ -6,7 +6,7 @@ const { attachItemImages } = require('../services/orderImages');
 const { extractOrderExtras } = require('../services/orderExtras');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const { makeDebugHandler } = require('./orderDebug');
-const { normalizeStage, availableActions, TERMINAL_RAW_STATUSES } = require('../services/kdsStages');
+const { normalizeStage, availableActions, TERMINAL_RAW_STATUSES, stageInfo } = require('../services/kdsStages');
 const router = express.Router();
 
 // GET /debug — painel de depuração: campos brutos + mapeamento (SÓ admin)
@@ -71,7 +71,7 @@ router.post('/:orderId/confirm', authenticateToken, async (req, res) => {
     await ifoodDistributed.confirmOrder(req.user.id, orderId);
     await pool.query(`UPDATE orders SET status='confirmed', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
     console.log(`[ifood confirm] pedido ${orderId} confirmado (user: ${req.user.id})`);
-    return res.json({ success: true });
+    return res.json({ success: true, order: stageInfo('ifood', orderId, 'confirmed') });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
@@ -92,7 +92,7 @@ router.post('/:orderId/cancel', authenticateToken, async (req, res) => {
     await ifoodDistributed.cancelOrder(req.user.id, orderId, reason);
     await pool.query(`UPDATE orders SET status='cancelled', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
     console.log(`[ifood cancel] pedido ${orderId} cancelado (user: ${req.user.id})`);
-    return res.json({ success: true });
+    return res.json({ success: true, order: stageInfo('ifood', orderId, 'cancelled') });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
@@ -112,7 +112,7 @@ router.post('/:orderId/ready', authenticateToken, async (req, res) => {
     await ifoodDistributed.readyToPickup(req.user.id, orderId);
     await pool.query(`UPDATE orders SET status='ready', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
     console.log(`[ifood ready] pedido ${orderId} pronto p/ retirada (user: ${req.user.id})`);
-    return res.json({ success: true });
+    return res.json({ success: true, order: stageInfo('ifood', orderId, 'ready') });
   } catch (err) {
     console.error(`[ifood ready] FALHA no pedido ${orderId}: ${err.message}`);
     return res.status(500).json({ error: 'Não foi possível marcar como pronto no iFood', details: err.message });
@@ -134,7 +134,7 @@ router.post('/:orderId/dispatch', authenticateToken, async (req, res) => {
     await ifoodDistributed.dispatchOrder(req.user.id, orderId);
     await pool.query(`UPDATE orders SET status='dispatched', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
     console.log(`[ifood dispatch] pedido ${orderId} saiu para entrega (user: ${req.user.id})`);
-    return res.json({ success: true });
+    return res.json({ success: true, order: stageInfo('ifood', orderId, 'dispatched') });
   } catch (err) {
     console.error(`[ifood dispatch] FALHA no pedido ${orderId}: ${err.message}`);
     return res.status(500).json({ error: 'Não foi possível despachar no iFood (só vale para entrega própria)', details: err.message });

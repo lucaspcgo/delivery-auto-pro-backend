@@ -6,7 +6,7 @@ const { attachItemImages } = require('../services/orderImages');
 const { extractOrderExtras } = require('../services/orderExtras');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const { makeDebugHandler } = require('./orderDebug');
-const { normalizeStage, availableActions, TERMINAL_RAW_STATUSES } = require('../services/kdsStages');
+const { normalizeStage, availableActions, TERMINAL_RAW_STATUSES, stageInfo } = require('../services/kdsStages');
 const router = express.Router();
 
 // Coluna do entregador (idempotente) — preenchida pelos eventos deliveryStatus.
@@ -209,10 +209,8 @@ router.get('/token', authenticateToken, async (req, res) => {
 // POST /:orderId/confirm — requer autenticação
 router.post('/:orderId/confirm', authenticateToken, async (req, res) => {
   const { orderId } = req.params;
-  const { app_shop_id } = req.body;
-  if (!app_shop_id) return res.status(400).json({ error: 'app_shop_id é obrigatório' });
   try {
-    // Validar ownership
+    // Validar ownership e já pegar o app_shop_id do próprio pedido (não exige no body)
     const order = await pool.query(
       'SELECT * FROM orders WHERE platform = $1 AND platform_order_id = $2 AND user_id = $3',
       ['99food', orderId, req.user.id]
@@ -220,15 +218,25 @@ router.post('/:orderId/confirm', authenticateToken, async (req, res) => {
     if (order.rowCount === 0) {
       return res.status(403).json({ error: 'Acesso negado' });
     }
+    const appShopId = req.body?.app_shop_id || order.rows[0].app_shop_id;
 
-    const authToken = await food99.getValidToken(app_shop_id);
-    await food99.confirmOrder(authToken, orderId);
+    // Tenta aceitar no 99Food. Se recusar (ex.: já aceito lá), NÃO trava o operador:
+    // avança a coluna no nosso KDS mesmo assim e avisa por platform_synced.
+    let platformSynced = true, warning = null;
+    try {
+      const authToken = await food99.getValidToken(appShopId);
+      await food99.confirmOrder(authToken, orderId);
+    } catch (e) {
+      platformSynced = false;
+      warning = 'O 99Food não aceitou o aceite (o pedido pode já estar aceito lá). Marcado no painel.';
+      console.warn(`[confirm] pedido ${orderId} não sincronizou com 99Food: ${e.message}`);
+    }
     await pool.query(`UPDATE orders SET status='confirmed', updated_at=now() WHERE platform='99food' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
-    console.log(`[confirm] pedido ${orderId} confirmado (user: ${req.user.id})`);
-    return res.json({ success: true });
+    console.log(`[confirm] pedido ${orderId} aceito (user: ${req.user.id}, 99food=${platformSynced ? 'ok' : 'nao'})`);
+    return res.json({ success: true, platform_synced: platformSynced, warning, order: stageInfo('99food', orderId, 'confirmed') });
   } catch (err) {
     console.error(`[confirm] FALHA ao aceitar pedido ${orderId}: ${err.message}`);
-    return res.status(500).json({ error: 'Não foi possível aceitar o pedido no 99Food', details: err.message });
+    return res.status(500).json({ error: 'Não foi possível aceitar o pedido', details: err.message });
   }
 });
 
@@ -259,10 +267,9 @@ router.post('/:orderId/pay-confirm', authenticateToken, async (req, res) => {
 // POST /:orderId/cancel — requer autenticação
 router.post('/:orderId/cancel', authenticateToken, async (req, res) => {
   const { orderId } = req.params;
-  const { app_shop_id, cancel_code } = req.body;
-  if (!app_shop_id) return res.status(400).json({ error: 'app_shop_id é obrigatório' });
+  const { cancel_code } = req.body;
   try {
-    // Validar ownership
+    // Validar ownership e pegar o app_shop_id do próprio pedido
     const order = await pool.query(
       'SELECT * FROM orders WHERE platform = $1 AND platform_order_id = $2 AND user_id = $3',
       ['99food', orderId, req.user.id]
@@ -270,12 +277,13 @@ router.post('/:orderId/cancel', authenticateToken, async (req, res) => {
     if (order.rowCount === 0) {
       return res.status(403).json({ error: 'Acesso negado' });
     }
+    const appShopId = req.body?.app_shop_id || order.rows[0].app_shop_id;
 
-    const authToken = await food99.getValidToken(app_shop_id);
+    const authToken = await food99.getValidToken(appShopId);
     await food99.cancelOrder(authToken, orderId, cancel_code || 1040);
     await pool.query(`UPDATE orders SET status='cancelled', updated_at=now() WHERE platform='99food' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
     console.log(`[cancel] pedido ${orderId} cancelado (user: ${req.user.id})`);
-    return res.json({ success: true });
+    return res.json({ success: true, order: stageInfo('99food', orderId, 'cancelled') });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
@@ -308,7 +316,7 @@ router.post('/:orderId/ready', authenticateToken, async (req, res) => {
     }
     await pool.query(`UPDATE orders SET status='ready', updated_at=now() WHERE platform='99food' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
     console.log(`[99food ready] pedido ${orderId} marcado como pronto (user: ${req.user.id}, 99food=${platformSynced ? 'ok' : 'nao'})`);
-    return res.json({ success: true, platform_synced: platformSynced, warning });
+    return res.json({ success: true, platform_synced: platformSynced, warning, order: stageInfo('99food', orderId, 'ready') });
   } catch (err) {
     console.error(`[99food ready] FALHA no pedido ${orderId}: ${err.message}`);
     return res.status(500).json({ error: 'Não foi possível marcar como pronto', details: err.message });

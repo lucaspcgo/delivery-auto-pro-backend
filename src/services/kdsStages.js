@@ -96,4 +96,15 @@ function availableActions(platform, stage) {
   return acts.map(a => ({ action: a, label: ACTION_LABELS[a] }));
 }
 
-module.exports = { STAGES, STAGE_KEYS, TERMINAL_STAGES, TERMINAL_RAW_STATUSES, isTerminalStatus, normalizeStage, availableActions, ACTION_LABELS };
+// Resumo de etapa para RESPOSTA de ação: o front atualiza só o card, sem refetch.
+function stageInfo(platform, orderId, status) {
+  const kds_stage = normalizeStage(status);
+  return {
+    platform_order_id: String(orderId),
+    status,
+    kds_stage,
+    available_actions: availableActions(platform, kds_stage),
+  };
+}
+
+module.exports = { STAGES, STAGE_KEYS, TERMINAL_STAGES, TERMINAL_RAW_STATUSES, isTerminalStatus, normalizeStage, availableActions, ACTION_LABELS, stageInfo };
