@@ -197,6 +197,29 @@ router.get('/orders', authenticateToken, async (req, res) => {
   } catch (err) { return res.status(500).json({ error: 'Erro ao buscar pedidos' }); }
 });
 
+// POST /reprocess-pending — reprocessa a automação nos pedidos parados em "pendente"
+// (status 100). Útil para pedidos antigos que ficaram travados. Respeita o
+// liga/desliga por loja (não força loja com automação desligada).
+router.post('/reprocess-pending', authenticateToken, async (req, res) => {
+  try {
+    const pend = await pool.query(
+      `SELECT platform_order_id, app_shop_id FROM orders
+        WHERE platform='99food' AND user_id=$1 AND status='100'
+        ORDER BY created_at ASC LIMIT 100`,
+      [req.user.id]
+    );
+    let disparados = 0;
+    for (const o of pend.rows) {
+      tryAutoAccept('99food', o.platform_order_id, o.app_shop_id, req.user.id); // não await (roda em série pelos delays)
+      disparados++;
+    }
+    console.log(`[reprocess-pending] ${disparados} pedido(s) reprocessado(s) (user: ${req.user.id})`);
+    return res.json({ success: true, reprocessed: disparados });
+  } catch (err) {
+    return res.status(500).json({ error: 'Não foi possível reprocessar', details: err.message });
+  }
+});
+
 // GET /token — requer autenticação
 router.get('/token', authenticateToken, async (req, res) => {
   try {
