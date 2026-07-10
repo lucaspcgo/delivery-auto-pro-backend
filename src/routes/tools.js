@@ -118,6 +118,7 @@ router.post('/99food/check-store', async (req, res) => {
       message: alreadyConnected ? 'Loja já conectada nesta conta.' : 'Acesso confirmado. Pronta para autorizar.',
     });
   } catch (err) {
+    console.warn(`[check-store] loja ${storeId} (user ${req.user.id}) recusada pelo 99Food: ${err.message}`);
     const semAcesso = /10101/.test(err.message) || /authorization.*not exist/i.test(err.message);
     return res.status(semAcesso ? 403 : 500).json({
       store_id: storeId,
