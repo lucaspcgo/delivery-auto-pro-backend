@@ -27,18 +27,21 @@ const TERMINAL_STAGES = new Set(['entregue', 'cancelado']);
 const STATUS_TO_STAGE = {
   // Pendente (pedido novo aguardando aceite)
   '100': 'pendente', 'placed': 'pendente', 'plc': 'pendente', 'new': 'pendente', 'pending': 'pendente',
-  // Aceito (confirmado pela loja)
+  // Aceito (confirmado pela loja) — 99Food usa 200
   '200': 'aceito', 'confirmed': 'aceito', 'cfm': 'aceito', 'accepted': 'aceito',
-  // Preparando (em produção)
+  // Preparando (em produção) — 99Food ~300
+  '300': 'preparando',
   'preparing': 'preparando', 'separation_started': 'preparando', 'sps': 'preparando',
   'separation_ended': 'preparando', 'spe': 'preparando', 'in_preparation': 'preparando',
   // Aguardando (pronto, esperando o entregador retirar)
   'ready': 'aguardando', 'ready_to_pickup': 'aguardando', 'rtp': 'aguardando', 'ready_to_deliver': 'aguardando',
-  // Entregando (saiu para entrega)
+  // Entregando (saiu para entrega) — 99Food 400/500 (entregador designado / a caminho)
+  '400': 'entregando', '500': 'entregando',
   'dispatched': 'entregando', 'dsp': 'entregando', 'on_the_way': 'entregando', 'going_to_origin': 'entregando',
   // No destino (entregador chegou no endereço do cliente)
   'arrived': 'no_destino', 'arrived_at_destination': 'no_destino', 'arv': 'no_destino',
-  // Entregue (concluído)
+  // Entregue (concluído) — 99Food 600
+  '600': 'entregue',
   'concluded': 'entregue', 'con': 'entregue', 'delivered': 'entregue', 'completed': 'entregue', 'dlv': 'entregue',
   // Cancelado
   'cancelled': 'cancelado', 'canceled': 'cancelado', 'can': 'cancelado', 'cancellation_requested': 'cancelado',
