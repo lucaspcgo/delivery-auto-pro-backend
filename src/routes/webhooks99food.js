@@ -284,7 +284,10 @@ router.post('/:orderId/cancel', authenticateToken, async (req, res) => {
     await pool.query(`UPDATE orders SET status='cancelled', updated_at=now() WHERE platform='99food' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
     console.log(`[cancel] pedido ${orderId} cancelado (user: ${req.user.id})`);
     return res.json({ success: true, order: stageInfo('99food', orderId, 'cancelled') });
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error(`[cancel] FALHA no pedido ${orderId}: ${err.message}`);
+    return res.status(500).json({ error: 'Não foi possível cancelar o pedido', details: err.message });
+  }
 });
 
 // POST /:orderId/ready — requer autenticação

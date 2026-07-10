@@ -72,7 +72,10 @@ router.post('/:orderId/confirm', authenticateToken, async (req, res) => {
     await pool.query(`UPDATE orders SET status='confirmed', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
     console.log(`[ifood confirm] pedido ${orderId} confirmado (user: ${req.user.id})`);
     return res.json({ success: true, order: stageInfo('ifood', orderId, 'confirmed') });
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error(`[ifood confirm] FALHA no pedido ${orderId}: ${err.message}`);
+    return res.status(500).json({ error: 'Não foi possível aceitar o pedido no iFood', details: err.message });
+  }
 });
 
 // POST /:orderId/cancel — requer autenticação
@@ -93,7 +96,10 @@ router.post('/:orderId/cancel', authenticateToken, async (req, res) => {
     await pool.query(`UPDATE orders SET status='cancelled', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
     console.log(`[ifood cancel] pedido ${orderId} cancelado (user: ${req.user.id})`);
     return res.json({ success: true, order: stageInfo('ifood', orderId, 'cancelled') });
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error(`[ifood cancel] FALHA no pedido ${orderId}: ${err.message}`);
+    return res.status(500).json({ error: 'Não foi possível cancelar o pedido no iFood', details: err.message });
+  }
 });
 
 // POST /:orderId/ready — requer autenticação
