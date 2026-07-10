@@ -1,6 +1,28 @@
 const pool = require('../db/postgres');
 const food99 = require('./food99');
 const ifoodDistributed = require('./ifood-distributed');
+const { stageRank } = require('./kdsStages');
+
+// Atualiza o status SÓ se for AVANÇO (nunca regride). Evita que o timer da
+// automação (aceite/pronto) puxe de volta um pedido que já foi pra entrega ou
+// já foi entregue. Retorna true se avançou.
+async function advanceIfForward(platform, orderId, userId, newStatus) {
+  const r = await pool.query(
+    `SELECT status FROM orders WHERE platform=$1 AND platform_order_id=$2 AND user_id=$3`,
+    [platform, String(orderId), userId]
+  );
+  if (r.rowCount === 0) return false;
+  const cur = r.rows[0].status;
+  if (stageRank(newStatus) <= stageRank(cur)) {
+    console.log(`[auto] pedido ${orderId} já está em etapa igual/mais adiantada (${cur}) — não regride para ${newStatus}`);
+    return false;
+  }
+  await pool.query(
+    `UPDATE orders SET status=$4, updated_at=now() WHERE platform=$1 AND platform_order_id=$2 AND user_id=$3`,
+    [platform, String(orderId), userId, newStatus]
+  );
+  return true;
+}
 
 // Garante a coluna do tempo de aceite (idempotente). accept_delay_seconds = quantos
 // segundos esperar ANTES de aceitar o pedido (0 = na hora).
@@ -85,11 +107,7 @@ async function tryAutoAccept(platform, orderId, storeId, userId) {
           await ifoodDistributed.confirmOrder(userId, orderId);
         }
 
-        await pool.query(
-          `UPDATE orders SET status = 'confirmed', updated_at = now()
-           WHERE platform = $1 AND platform_order_id = $2 AND user_id = $3`,
-          [platform, String(orderId), userId]
-        );
+        await advanceIfForward(platform, orderId, userId, 'confirmed');
 
         console.log(`[auto-accept] pedido ${orderId} (${platform}, user ${userId}) ACEITO automaticamente`);
 
@@ -109,11 +127,7 @@ async function tryAutoAccept(platform, orderId, storeId, userId) {
               console.log(`[auto-ready] pedido ${orderId} (99food) marcado como PRONTO`);
             }
 
-            await pool.query(
-              `UPDATE orders SET status = 'ready', updated_at = now()
-               WHERE platform = $1 AND platform_order_id = $2 AND user_id = $3`,
-              [platform, String(orderId), userId]
-            );
+            await advanceIfForward(platform, orderId, userId, 'ready');
 
             console.log(`[auto-ready] pedido ${orderId} (${platform}, user ${userId}) PRONTO automaticamente`);
           } catch (err) {
