@@ -9,6 +9,9 @@ const { makeDebugHandler } = require('./orderDebug');
 const { normalizeStage, availableActions, TERMINAL_RAW_STATUSES } = require('../services/kdsStages');
 const router = express.Router();
 
+// Coluna do entregador (idempotente) — preenchida pelos eventos deliveryStatus.
+pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS courier_name TEXT`).catch(() => {});
+
 // GET /debug — painel de depuração: campos brutos + mapeamento (SÓ admin)
 router.get('/debug', authenticateToken, requireAdmin, makeDebugHandler('99food'));
 
@@ -43,6 +46,32 @@ router.post('/', async (req, res) => {
       console.log(`[99food webhook] loja encontrada: ${loja.rows[0].name} (user: ${userId})`);
     } else {
       console.log(`[99food webhook] loja ${appShopId} NAO cadastrada — rejeitando`);
+      return;
+    }
+
+    // ── Tratamento por TIPO de evento (mais confiável que o código numérico) ──
+    // O 99Food manda: orderNew, orderConfirm, deliveryStatus, orderFinish, orderCancel.
+    // Eventos de progresso/fim só mudam o STATUS (não reprocessam nem regridem).
+    const eventType = body.type || null;
+
+    if (eventType === 'orderFinish') {
+      await pool.query(`UPDATE orders SET status='delivered', updated_at=now() WHERE platform='99food' AND platform_order_id=$1 AND user_id=$2`, [String(orderId), userId]);
+      console.log(`[99food webhook] pedido ${orderId} FINALIZADO -> entregue (sai do KDS)`);
+      return;
+    }
+    if (/cancel/i.test(String(eventType))) {
+      await pool.query(`UPDATE orders SET status='cancelled', updated_at=now() WHERE platform='99food' AND platform_order_id=$1 AND user_id=$2`, [String(orderId), userId]);
+      console.log(`[99food webhook] pedido ${orderId} CANCELADO`);
+      return;
+    }
+    if (eventType === 'deliveryStatus') {
+      const rider = body.data?.rider_name || body.data?.riderName || null;
+      await pool.query(
+        `UPDATE orders SET status='dispatched', courier_name=COALESCE($3, courier_name), updated_at=now()
+          WHERE platform='99food' AND platform_order_id=$1 AND user_id=$2`,
+        [String(orderId), userId, rider]
+      );
+      console.log(`[99food webhook] pedido ${orderId} em ENTREGA (entregador: ${rider || 'n/d'})`);
       return;
     }
 
@@ -125,12 +154,14 @@ router.post('/', async (req, res) => {
     await pool.query(`UPDATE integrations SET orders_count=orders_count+1, last_sync_at=now(), updated_at=now() WHERE platform='99food' AND user_id=$1`, [userId]);
     console.log(`[99food webhook] pedido ${orderId} salvo (loja: ${shopName || appShopId}, user: ${userId})`);
 
-    // DIAGNÓSTICO (temporário): registra o status cru de cada aviso do 99Food para
-    // descobrirmos os códigos de cada etapa (preparo/despacho/entregue). Acompanhe
-    // um pedido real do início ao fim e veja a sequência de códigos aqui.
-    console.log(`[99food status] pedido ${orderId}: status=${order.status} | delivery_type=${order.delivery_type} | fulfillment_mode=${order.fulfillment_mode} -> etapa atual "${normalizeStage(order.status)}"`);
-
-    await tryAutoAccept('99food', orderId, appShopId, userId);
+    // A automação só dispara em PEDIDO NOVO (orderNew ou aviso sem tipo). O
+    // orderConfirm apenas confirma no 99Food — reprocessar aqui duplicaria o
+    // aceite/pronto (aceitava e marcava pronto duas vezes).
+    if (eventType === 'orderNew' || eventType == null) {
+      await tryAutoAccept('99food', orderId, appShopId, userId);
+    } else {
+      console.log(`[99food webhook] evento ${eventType} do pedido ${orderId} — sem reprocessar automação`);
+    }
   } catch (err) { console.error('[99food webhook] erro:', err.message); }
 });
 
@@ -138,7 +169,7 @@ router.post('/', async (req, res) => {
 router.get('/orders', authenticateToken, async (req, res) => {
   try {
     const { date } = req.query;
-    let query = `SELECT o.id, o.platform, o.platform_order_id, o.app_shop_id, o.status, o.customer_name, o.customer_phone, o.delivery_address, o.items, o.total_price, o.raw_payload, o.created_at, o.updated_at,
+    let query = `SELECT o.id, o.platform, o.platform_order_id, o.app_shop_id, o.status, o.customer_name, o.customer_phone, o.delivery_address, o.items, o.total_price, o.raw_payload, o.created_at, o.updated_at, o.courier_name,
         (SELECT r.name FROM restaurant_platforms rp JOIN restaurants r ON r.id = rp.restaurant_id
           WHERE rp.platform='99food' AND rp.app_shop_id = o.app_shop_id LIMIT 1) AS store_name
       FROM orders o
@@ -155,7 +186,9 @@ router.get('/orders', authenticateToken, async (req, res) => {
     const result = await pool.query(query, params);
     const orders = await attachItemImages(result.rows, '99food', req.user.id);
     for (const o of orders) {
+      const colCourier = o.courier_name; // veio do evento deliveryStatus
       Object.assign(o, extractOrderExtras(o.raw_payload, '99food'));
+      o.courier_name = colCourier || o.courier_name || null; // coluna tem prioridade
       o.kds_stage = normalizeStage(o.status); // etapa/coluna do KDS
       o.available_actions = availableActions('99food', o.kds_stage); // botões válidos
       delete o.raw_payload; // não devolve o payload cru (grande)

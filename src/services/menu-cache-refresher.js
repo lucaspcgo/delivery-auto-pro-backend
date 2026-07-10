@@ -45,7 +45,7 @@ async function refreshOnce() {
       if (/10101/.test(err.message) || /store authorization.*not exist/i.test(err.message)) {
         try {
           await pool.query(
-            `UPDATE restaurant_platforms SET status = 'unauthorized', updated_at = NOW()
+            `UPDATE restaurant_platforms SET status = 'disconnected', updated_at = NOW()
              WHERE platform = '99food' AND COALESCE(app_shop_id, platform_store_id) = $1`,
             [shopId]
           );
