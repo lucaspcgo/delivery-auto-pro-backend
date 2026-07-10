@@ -99,12 +99,25 @@ router.post('/', async (req, res) => {
     const nomeCliente = [semMascara(ra.first_name), semMascara(ra.last_name)].filter(Boolean).join(' ')
       || semMascara(ra.name) || null;
 
+    // Decide o status a salvar SEM REGREDIR: se já existe pedido e o novo aviso do
+    // 99Food traz status "atrás" do que a automação já avançou (ex.: 200 depois de
+    // nós marcarmos 'ready'), mantemos o nosso. Só avançamos para entregue/cancelado.
+    const incomingStatus = String(order.status || 100);
+    const terminal = Number(order.cancel_time) > 0 ? 'cancelled'
+      : (Number(order.complete_time) > 0 ? 'delivered' : null);
+    const existing = await pool.query(
+      `SELECT status FROM orders WHERE platform='99food' AND platform_order_id=$1`, [String(orderId)]
+    );
+    const finalStatus = existing.rowCount === 0
+      ? (terminal || incomingStatus)         // pedido novo: usa o status recebido
+      : (terminal || existing.rows[0].status); // já existe: não regride (só terminal avança)
+
     // 2. Salva o pedido com user_id
     await pool.query(
       `INSERT INTO orders (platform, platform_order_id, app_shop_id, status, customer_name, customer_phone, delivery_address, items, total_price, raw_payload, user_id, created_at, updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now(),now())
        ON CONFLICT (platform, platform_order_id) DO UPDATE SET status=EXCLUDED.status, raw_payload=EXCLUDED.raw_payload, updated_at=now()`,
-      ['99food', String(orderId), appShopId, String(order.status || 100),
+      ['99food', String(orderId), appShopId, finalStatus,
        nomeCliente, ra.phone || null,
        endereco, JSON.stringify(order.order_items || []),
        (order.price?.real_pay_price || order.price?.order_price || 0) / 100, JSON.stringify(order), userId]
