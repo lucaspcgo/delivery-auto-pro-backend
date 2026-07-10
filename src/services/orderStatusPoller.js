@@ -9,7 +9,7 @@
 // Senão, guardamos o status cru que a API devolver.
 const pool = require('../db/postgres');
 const food99 = require('./food99');
-const { normalizeStage } = require('./kdsStages');
+const { normalizeStage, stageRank } = require('./kdsStages');
 
 const INTERVALO = 120 * 1000; // a cada 2 min
 const ESPACO = 2000;          // 2s entre chamadas (respeita limite do 99Food)
@@ -40,13 +40,16 @@ async function pollOnce() {
       const detail = await food99.getOrderDetail(token, o.platform_order_id);
       if (!detail || typeof detail !== 'object') { await sleep(ESPACO); continue; }
 
-      // IMPORTANTE: só AVANÇAMOS para estado final (entregue/cancelado). NUNCA
-      // sobrescrevemos com o status cru do 99Food, senão puxaríamos o pedido pra
-      // trás — ex.: nós marcamos 'ready', mas o 99Food (entrega da plataforma)
-      // mantém 200, e o poller reverteria 'ready' -> 'aceito', travando o fluxo.
+      // Regra: só AVANÇA (nunca regride). Estado final por complete_time/cancel_time;
+      // caso contrário, adota o status do 99Food SOMENTE se ele estiver numa etapa
+      // MAIS ADIANTADA que a nossa (ex.: nós em 'ready'/aguardando e o 99Food já em
+      // 400/entregando -> avança para entregando; mas nunca volta 'ready' -> 200).
       let novo = null;
       if (Number(detail.complete_time) > 0) novo = 'delivered';
       else if (Number(detail.cancel_time) > 0) novo = 'cancelled';
+      else if (detail.status != null && stageRank(detail.status) > stageRank(o.status)) {
+        novo = String(detail.status);
+      }
 
       if (novo && String(novo) !== String(o.status)) {
         await pool.query(

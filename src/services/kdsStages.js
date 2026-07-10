@@ -58,6 +58,12 @@ function isTerminalStatus(status) {
   return TERMINAL_STAGES.has(normalizeStage(status));
 }
 
+// Posição da etapa no fluxo (para comparar "mais adiantado"). Maior = mais à frente.
+const STAGE_ORDER = Object.fromEntries(STAGES.map(s => [s.key, s.order]));
+function stageRank(status) {
+  return STAGE_ORDER[normalizeStage(status)] || 0;
+}
+
 // Descobre a etapa do KDS a partir do status cru salvo no pedido.
 // Status não reconhecido cai em 'pendente' (pedido novo/actionável) — assim
 // aparece na primeira coluna com o botão "Aceitar", nunca some do KDS.
@@ -107,4 +113,4 @@ function stageInfo(platform, orderId, status) {
   };
 }
 
-module.exports = { STAGES, STAGE_KEYS, TERMINAL_STAGES, TERMINAL_RAW_STATUSES, isTerminalStatus, normalizeStage, availableActions, ACTION_LABELS, stageInfo };
+module.exports = { STAGES, STAGE_KEYS, TERMINAL_STAGES, TERMINAL_RAW_STATUSES, isTerminalStatus, stageRank, normalizeStage, availableActions, ACTION_LABELS, stageInfo };
