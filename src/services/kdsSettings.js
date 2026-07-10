@@ -30,7 +30,7 @@ const AVAILABLE_FIELDS = [
   { key: 'neighborhood',    label: 'Bairro / setor',         group: 'pedido', default: true },
   { key: 'note',            label: 'Observação do cliente',  group: 'pedido', default: true },
   { key: 'payment_method',  label: 'Forma de pagamento',     group: 'pedido', default: false },
-  { key: 'order_number',    label: 'Número do pedido',       group: 'pedido', default: false },
+  { key: 'order_number',    label: 'Número do pedido',       group: 'pedido', default: true },
   { key: 'customer_phone',  label: 'Telefone do cliente',    group: 'pedido', default: false },
   { key: 'delivery_address',label: 'Endereço de entrega',    group: 'pedido', default: false },
   // ── Por item ──
