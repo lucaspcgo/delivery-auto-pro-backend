@@ -40,10 +40,13 @@ async function pollOnce() {
       const detail = await food99.getOrderDetail(token, o.platform_order_id);
       if (!detail || typeof detail !== 'object') { await sleep(ESPACO); continue; }
 
+      // IMPORTANTE: só AVANÇAMOS para estado final (entregue/cancelado). NUNCA
+      // sobrescrevemos com o status cru do 99Food, senão puxaríamos o pedido pra
+      // trás — ex.: nós marcamos 'ready', mas o 99Food (entrega da plataforma)
+      // mantém 200, e o poller reverteria 'ready' -> 'aceito', travando o fluxo.
       let novo = null;
       if (Number(detail.complete_time) > 0) novo = 'delivered';
       else if (Number(detail.cancel_time) > 0) novo = 'cancelled';
-      else if (detail.status != null) novo = String(detail.status);
 
       if (novo && String(novo) !== String(o.status)) {
         await pool.query(
