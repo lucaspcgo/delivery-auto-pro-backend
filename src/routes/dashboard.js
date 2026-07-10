@@ -36,10 +36,12 @@ router.get('/summary', async (req, res) => {
     if (hasPlatform) { ontemWhere += ` AND platform = $${ontemIdx++}`; ontemParams.push(platform); }
     const ontem = await pool.query(`SELECT COUNT(*) as total, COALESCE(SUM(total_price),0) as faturamento FROM orders WHERE ${ontemWhere}`, ontemParams);
 
-    // Pendentes
+    // Pendentes (aguardando aceite) — escopado à data selecionada, senão acumula
+    // pedidos antigos travados e o número perde o sentido.
     const pendParams = [userId];
     let pendIdx = 2;
-    let pendWhere = `user_id = $1 AND status = '100'`;
+    let pendWhere = `user_id = $1 AND status = '100' AND DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = $${pendIdx++}`;
+    pendParams.push(targetDate);
     if (hasPlatform) { pendWhere += ` AND platform = $${pendIdx++}`; pendParams.push(platform); }
     const pendentes = await pool.query(`SELECT COUNT(*) as total FROM orders WHERE ${pendWhere}`, pendParams);
 
