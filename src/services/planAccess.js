@@ -39,4 +39,12 @@ async function getLimit(user, key) {
   return p[key] || 0;
 }
 
-module.exports = { resolveUserPlan, hasCapability, getLimit };
+async function checkRestaurantLimit(userId, user) {
+  const limit = await getLimit(user, 'max_restaurants');
+  if (limit === 0) return { allowed: true };
+  const r = await pool.query(`SELECT COUNT(*)::int AS count FROM restaurants WHERE user_id = $1`, [userId]);
+  const count = r.rows[0].count;
+  return { allowed: count < limit, count, limit };
+}
+
+module.exports = { resolveUserPlan, hasCapability, getLimit, checkRestaurantLimit };

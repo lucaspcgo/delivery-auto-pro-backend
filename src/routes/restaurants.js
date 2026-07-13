@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../db/postgres');
 const { authenticateToken } = require('../middleware/auth');
+const { checkRestaurantLimit } = require('../services/planAccess');
 const router = express.Router();
 
 // DEBUG: teste iFood (SEM autenticação)
@@ -196,6 +197,10 @@ router.post('/', async (req, res) => {
   const { name, owner_name, phone, email, address } = req.body;
   if (!name) return res.status(400).json({ error: 'Nome é obrigatório' });
   try {
+    const gate = await checkRestaurantLimit(req.user.id, req.user);
+    if (!gate.allowed) {
+      return res.status(403).json({ error: 'plan_limit_reached', limit: 'max_restaurants', max: gate.limit });
+    }
     const result = await pool.query(
       `INSERT INTO restaurants (name, owner_name, phone, email, address, user_id)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
