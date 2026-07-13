@@ -31,6 +31,9 @@ Abordagem escolhida: **A — coluna `capabilities` estruturada + serviço centra
 
 - **Capacidades booleanas:** `menu_sync`, `auto_accept` (extensível).
 - **Limites numéricos:** `max_restaurants`, `max_orders_month`. **`0` = ilimitado.**
+- **Período de cobrança (`billing_period`):** `weekly`, `monthly`, `yearly`. Define o
+  ciclo do plano e a validade (`plan_expires_at`): `weekly` = +7 dias, `monthly` = +30,
+  `yearly` = +365. O admin escolhe o período ao editar o plano.
 - **Gating duro** (bloqueia com 403): capacidades e `max_restaurants`.
 - **Gating suave** (não bloqueia, só sinaliza): `max_orders_month` — nunca derruba
   pedido real.
@@ -106,7 +109,11 @@ Retorna para o frontend montar avisos e travar botões:
 ### 7. Extensão do CRUD de planos
 
 - `POST`/`PUT` em [src/routes/plans.js](../../../src/routes/plans.js) passam a aceitar e
-  persistir `capabilities` (JSONB), mantendo `features` para texto.
+  persistir `capabilities` (JSONB), mantendo `features` para texto. `billing_period`
+  aceita `weekly`/`monthly`/`yearly`.
+- [src/routes/checkout.js](../../../src/routes/checkout.js) hoje fixa `plan_expires_at`
+  em `INTERVAL '30 days'`; passa a derivar o intervalo do `billing_period` do plano
+  (7/30/365 dias).
 
 ### 8. Frontend Lovable (fora deste repo)
 
