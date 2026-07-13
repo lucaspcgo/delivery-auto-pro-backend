@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../db/postgres');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { requireCapability } = require('../middleware/planGuard');
 const ifoodAPI = require('../services/ifood-api-complete');
 const ifoodDistributed = require('../services/ifood-distributed');
 const food99 = require('../services/food99');
@@ -32,7 +33,7 @@ router.get('/restaurants', authenticateToken, requireAdmin, async (req, res) => 
 });
 
 // POST /api/v1/admin/menu/fetch — Buscar cardápio via API real
-router.post('/fetch', authenticateToken, requireAdmin, async (req, res) => {
+router.post('/fetch', authenticateToken, requireCapability('menu_sync'), async (req, res) => {
   try {
     const { restaurant_id, platform } = req.body;
     
@@ -141,7 +142,7 @@ router.post('/fetch', authenticateToken, requireAdmin, async (req, res) => {
 });
 
 // POST /api/v1/admin/menu/copy
-router.post('/copy', authenticateToken, requireAdmin, async (req, res) => {
+router.post('/copy', authenticateToken, requireCapability('menu_sync'), async (req, res) => {
   try {
     const { from_restaurant_id, to_restaurant_id, from_platform, to_platform, selected_items } = req.body;
     
