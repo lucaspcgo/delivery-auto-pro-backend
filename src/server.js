@@ -18,6 +18,7 @@ const settingsRouter = require('./routes/settings');
 const adminRouter = require('./routes/admin');
 const checkoutRouter = require('./routes/checkout');
 const plansRouter = require('./routes/plans');
+const usageRouter = require('./routes/usage');
 const menuAdminRouter = require('./routes/menuadmin');
 
 const app = express();
@@ -103,6 +104,7 @@ app.use('/api/v1/admin', adminRouter);
 app.use('/api/v1/admin/menu', menuAdminRouter);
 app.use('/api/v1/checkout', authLimiter, checkoutRouter);
 app.use('/api/v1/plans', plansRouter);
+app.use('/api/v1/usage', usageRouter);
 
 app.use((req, res) => { res.status(404).json({ error: 'Rota não encontrada' }); });
 
@@ -125,5 +127,13 @@ app.listen(PORT, () => {
     require('./services/orderStatusPoller').startOrderStatusPolling();
   } catch (err) {
     console.error('[server] falha ao iniciar sincronização de status:', err.message);
+  }
+  // Garante schema de plans com capabilities e limites
+  try {
+    require('./db/planSchema').ensurePlanSchema()
+      .then(() => console.log('[planSchema] pronto'))
+      .catch(err => console.error('[planSchema] erro:', err.message));
+  } catch (err) {
+    console.error('[server] falha ao iniciar schema de plans:', err.message);
   }
 });

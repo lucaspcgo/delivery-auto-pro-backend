@@ -2,10 +2,12 @@ const express = require('express');
 const pool = require('../db/postgres');
 const { tryAutoAccept, ensureAutomationSchema } = require('../services/autoAccept');
 const { authenticateToken } = require('../middleware/auth');
+const { requireCapability, requireActiveUser } = require('../middleware/planGuard');
 const router = express.Router();
 
 // Aplicar autenticação em todas as rotas
 router.use(authenticateToken);
+router.use(requireActiveUser);
 
 router.get('/', async (req, res) => {
   try {
@@ -20,7 +22,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', requireCapability('auto_accept'), async (req, res) => {
   const { id } = req.params;
   const { enabled, delay_seconds, accept_delay_seconds } = req.body;
   try {

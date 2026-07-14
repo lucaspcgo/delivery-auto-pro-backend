@@ -5,6 +5,7 @@ const pool = require('../db/postgres');
 const router = express.Router();
 
 const { JWT_SECRET } = require('../config/env');
+const { billingIntervalDays } = require('../services/billing');
 
 function optionalAuth(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -122,9 +123,14 @@ router.post('/confirm', async (req, res) => {
       `UPDATE invoices SET status='paid', paid_at=now(), gateway_transaction_id=$1, updated_at=now() WHERE id=$2`,
       [gateway_transaction_id || 'manual', invoice_id]
     );
+    const planResult = await pool.query('SELECT billing_period FROM plans WHERE slug = $1', [inv.plan]);
+    const period = planResult.rows[0] ? planResult.rows[0].billing_period : null;
+    const days = billingIntervalDays(period);
     await pool.query(
-      `UPDATE users SET plan=$1, payment_status='active', plan_expires_at=(now() + INTERVAL '30 days'), active=true, updated_at=now() WHERE id=$2`,
-      [inv.plan, inv.user_id]
+      `UPDATE users SET plan=$1, payment_status='active',
+         plan_expires_at=(now() + ($2 || ' days')::interval), active=true, updated_at=now()
+       WHERE id=$3`,
+      [inv.plan, String(days), inv.user_id]
     );
 
     // Criar dados padrão se não existirem
