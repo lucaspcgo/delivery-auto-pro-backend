@@ -1,4 +1,5 @@
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'x'.repeat(40);
+process.env.PLAN_GATING_ENABLED = 'true';
 jest.mock('../src/db/postgres', () => require('./helpers/mockPool').mockPool());
 jest.mock('../src/middleware/auth', () => ({
   authenticateToken: (req, res, next) => { req.user = { id: 1 }; next(); },

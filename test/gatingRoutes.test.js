@@ -1,3 +1,4 @@
+process.env.PLAN_GATING_ENABLED = 'true';
 const express = require('express');
 const request = require('supertest');
 

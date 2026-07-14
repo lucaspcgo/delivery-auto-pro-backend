@@ -1,9 +1,11 @@
 const pool = require('../db/postgres');
 const { hasCapability } = require('../services/planAccess');
+const { isPlanGatingEnabled } = require('../config/featureFlags');
 
 // Trava a rota se o plano do usuário não tem a capacidade.
 function requireCapability(key) {
   return async (req, res, next) => {
+    if (!isPlanGatingEnabled()) return next();
     try {
       if (await hasCapability(req.user, key)) return next();
       return res.status(403).json({ error: 'plan_upgrade_required', capability: key });
@@ -15,6 +17,7 @@ function requireCapability(key) {
 
 // Rejeita usuário inativo ou com trial expirado.
 async function requireActiveUser(req, res, next) {
+  if (!isPlanGatingEnabled()) return next();
   try {
     const r = await pool.query(
       `SELECT active, plan, plan_expires_at FROM users WHERE id = $1`, [req.user.id]

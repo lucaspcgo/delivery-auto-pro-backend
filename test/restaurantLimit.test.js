@@ -1,3 +1,4 @@
+process.env.PLAN_GATING_ENABLED = 'true';
 jest.mock('../src/db/postgres', () => require('./helpers/mockPool').mockPool());
 const pool = require('../src/db/postgres');
 const { checkRestaurantLimit } = require('../src/services/planAccess');

@@ -1,3 +1,4 @@
+process.env.PLAN_GATING_ENABLED = 'true';
 jest.mock('../src/services/planAccess');
 jest.mock('../src/db/postgres');
 const planAccess = require('../src/services/planAccess');

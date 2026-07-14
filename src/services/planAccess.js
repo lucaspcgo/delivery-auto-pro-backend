@@ -1,4 +1,5 @@
 const pool = require('../db/postgres');
+const { isPlanGatingEnabled } = require('../config/featureFlags');
 
 const COLS = 'slug, name, active, capabilities, max_restaurants, max_orders_month';
 
@@ -40,6 +41,7 @@ async function getLimit(user, key) {
 }
 
 async function checkRestaurantLimit(userId, user) {
+  if (!isPlanGatingEnabled()) return { allowed: true };
   const limit = await getLimit(user, 'max_restaurants');
   if (limit === 0) return { allowed: true };
   const r = await pool.query(`SELECT COUNT(*)::int AS count FROM restaurants WHERE user_id = $1`, [userId]);
