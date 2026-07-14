@@ -73,10 +73,11 @@ router.put('/company', async (req, res) => {
 // PUT /api/v1/settings/plan — atualizar plano
 router.put('/plan', async (req, res) => {
   const { plan } = req.body;
-  if (!['starter', 'pro', 'enterprise'].includes(plan)) {
-    return res.status(400).json({ error: 'Plano inválido' });
-  }
   try {
+    const exists = await pool.query('SELECT 1 FROM plans WHERE slug = $1 AND active = true', [plan]);
+    if (exists.rows.length === 0) {
+      return res.status(400).json({ error: 'Plano inválido' });
+    }
     const result = await pool.query(
       `UPDATE users SET plan=$1, updated_at=now() WHERE id=$2 RETURNING id, plan`,
       [plan, req.user.id]
