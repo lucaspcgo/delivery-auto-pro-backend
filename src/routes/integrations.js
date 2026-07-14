@@ -11,6 +11,24 @@ const router = express.Router();
 
 const PLATAFORMAS_VALIDAS = ['ifood', '99food', 'keeta'];
 
+// Metadados exibidos nos cards de integração (nome/descrição padrão).
+const PLATFORM_META = {
+  ifood:   { name: 'iFood',  description: 'Conecte sua loja do iFood para centralizar os pedidos.' },
+  '99food': { name: '99Food', description: 'Conecte sua loja do 99Food para centralizar os pedidos.' },
+  keeta:   { name: 'Keeta',  description: 'Conecte sua loja da Keeta para centralizar os pedidos.' },
+};
+const PLATFORM_ORDER = { ifood: 1, keeta: 2, '99food': 3 };
+
+// Placeholder de card quando o usuário ainda não tem a linha de integração.
+function placeholderIntegration(platform) {
+  const meta = PLATFORM_META[platform] || { name: platform, description: '' };
+  return {
+    id: null, platform, name: meta.name, description: meta.description,
+    status: 'disconnected', orders_count: 0, last_sync_at: null,
+    api_status: 'offline', created_at: null, updated_at: null,
+  };
+}
+
 // Aplicar autenticação em todas as rotas
 router.use(authenticateToken);
 
@@ -20,11 +38,41 @@ router.get('/', async (req, res) => {
       `SELECT id, platform, name, description, status, orders_count,
               last_sync_at, api_status, created_at, updated_at
        FROM integrations
-       WHERE user_id = $1
-       ORDER BY CASE platform WHEN 'ifood' THEN 1 WHEN 'keeta' THEN 2 WHEN '99food' THEN 3 END`,
+       WHERE user_id = $1`,
       [req.user.id]
     );
-    return res.json(result.rows);
+    const byPlatform = {};
+    for (const row of result.rows) byPlatform[row.platform] = row;
+
+    // Self-heal: cria as linhas que faltam (ex.: usuário cujo seed não rodou).
+    // Se a criação falhar (schema/constraint), cai no placeholder — o card
+    // ainda aparece e o GET nunca quebra.
+    const missing = PLATAFORMAS_VALIDAS.filter(p => !byPlatform[p]);
+    if (missing.length) {
+      for (const p of missing) {
+        try {
+          const meta = PLATFORM_META[p] || { name: p, description: '' };
+          const ins = await pool.query(
+            `INSERT INTO integrations (user_id, platform, name, description, status, api_status)
+             VALUES ($1,$2,$3,$4,'disconnected','offline')
+             ON CONFLICT (user_id, platform) DO NOTHING
+             RETURNING id, platform, name, description, status, orders_count,
+                       last_sync_at, api_status, created_at, updated_at`,
+            [req.user.id, p, meta.name, meta.description]
+          );
+          if (ins.rows[0]) byPlatform[p] = ins.rows[0];
+        } catch (seedErr) {
+          console.warn(`[GET /integrations] self-heal ${p} falhou (usando placeholder):`, seedErr.message);
+        }
+      }
+    }
+
+    // Sempre devolve os cards das plataformas válidas, na ordem definida.
+    const list = PLATAFORMAS_VALIDAS
+      .map(p => byPlatform[p] || placeholderIntegration(p))
+      .sort((a, b) => (PLATFORM_ORDER[a.platform] || 9) - (PLATFORM_ORDER[b.platform] || 9));
+
+    return res.json(list);
   } catch (err) {
     console.error('[GET /integrations] erro:', err);
     return res.status(500).json({ error: 'Erro ao buscar integrações' });
