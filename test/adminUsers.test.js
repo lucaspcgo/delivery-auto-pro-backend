@@ -20,7 +20,9 @@ describe('settings PUT /plan — validação dinâmica contra tabela plans', () 
   beforeEach(() => pool.query.mockReset());
 
   test('plano inexistente na tabela plans -> 400', async () => {
-    pool.query.mockResolvedValueOnce({ rows: [] }); // SELECT em plans
+    pool.query
+      .mockResolvedValueOnce({ rows: [{ active: true, plan: 'free', plan_expires_at: null }] }) // requireActiveUser
+      .mockResolvedValueOnce({ rows: [] }); // SELECT em plans
     const res = await request(app).put('/plan').set('Authorization', 'Bearer faketoken').send({ plan: 'inexistente' });
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: 'Plano inválido' });
@@ -28,12 +30,13 @@ describe('settings PUT /plan — validação dinâmica contra tabela plans', () 
 
   test('plano existente na tabela plans -> 200 e atualiza', async () => {
     pool.query
+      .mockResolvedValueOnce({ rows: [{ active: true, plan: 'free', plan_expires_at: null }] }) // requireActiveUser
       .mockResolvedValueOnce({ rows: [{}] }) // SELECT em plans
       .mockResolvedValueOnce({ rows: [{ id: 1, plan: 'pro' }] }); // UPDATE users
     const res = await request(app).put('/plan').set('Authorization', 'Bearer faketoken').send({ plan: 'pro' });
     expect(res.status).toBe(200);
-    expect(pool.query).toHaveBeenCalledTimes(2);
-    expect(pool.query.mock.calls[1][0]).toMatch(/UPDATE users SET plan/);
+    expect(pool.query).toHaveBeenCalledTimes(3);
+    expect(pool.query.mock.calls[2][0]).toMatch(/UPDATE users SET plan/);
   });
 });
 

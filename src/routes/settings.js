@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const pool = require('../db/postgres');
 const kdsSettings = require('../services/kdsSettings');
+const { requireActiveUser } = require('../middleware/planGuard');
 const router = express.Router();
 
 const { JWT_SECRET } = require('../config/env');
@@ -24,6 +25,7 @@ function authMiddleware(req, res, next) {
 }
 
 router.use(authMiddleware);
+router.use(requireActiveUser);
 
 // GET /api/v1/settings/profile — dados do perfil
 router.get('/profile', async (req, res) => {

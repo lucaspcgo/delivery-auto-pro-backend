@@ -11,4 +11,7 @@ test('ensurePlanSchema roda DDL de capabilities e defaults', async () => {
   expect(sql).toMatch(/ADD COLUMN IF NOT EXISTS capabilities/i);
   expect(sql).toMatch(/max_restaurants/i);
   expect(sql).toMatch(/max_orders_month/i);
+  expect(sql).toMatch(/INSERT INTO plans/i);
+  expect(sql).toMatch(/'free'/);
+  expect(sql).toMatch(/ON CONFLICT \(slug\) DO NOTHING/i);
 });

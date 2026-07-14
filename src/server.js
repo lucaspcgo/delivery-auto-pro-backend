@@ -129,7 +129,11 @@ app.listen(PORT, () => {
     console.error('[server] falha ao iniciar sincronização de status:', err.message);
   }
   // Garante schema de plans com capabilities e limites
-  require('./db/planSchema').ensurePlanSchema()
-    .then(() => console.log('[planSchema] pronto'))
-    .catch(err => console.error('[planSchema] erro:', err.message));
+  try {
+    require('./db/planSchema').ensurePlanSchema()
+      .then(() => console.log('[planSchema] pronto'))
+      .catch(err => console.error('[planSchema] erro:', err.message));
+  } catch (err) {
+    console.error('[server] falha ao iniciar schema de plans:', err.message);
+  }
 });

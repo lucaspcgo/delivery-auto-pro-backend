@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../db/postgres');
 const { authenticateToken } = require('../middleware/auth');
+const { requireActiveUser } = require('../middleware/planGuard');
 const { checkRestaurantLimit } = require('../services/planAccess');
 const router = express.Router();
 
@@ -33,6 +34,7 @@ router.post('/test-ifood/:merchant_id', async (req, res) => {
 
 // Autenticação obrigatória a partir daqui
 router.use(authenticateToken);
+router.use(requireActiveUser);
 
 // PUT /automation — liga/desliga a automação de UMA loja.
 // (Declarada ANTES de /:id para não ser confundida com um id.)

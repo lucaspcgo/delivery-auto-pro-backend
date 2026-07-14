@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../db/postgres');
 const { authenticateToken } = require('../middleware/auth');
+const { requireActiveUser } = require('../middleware/planGuard');
 const { resolveUserPlan } = require('../services/planAccess');
 const router = express.Router();
 
@@ -25,7 +26,7 @@ async function buildUsage(user) {
   };
 }
 
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', authenticateToken, requireActiveUser, async (req, res) => {
   try { return res.json(await buildUsage(req.user)); }
   catch (err) { return res.status(500).json({ error: 'usage_failed', details: err.message }); }
 });

@@ -1,7 +1,7 @@
 const express = require('express');
 const pool = require('../db/postgres');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
-const { requireCapability } = require('../middleware/planGuard');
+const { requireCapability, requireActiveUser } = require('../middleware/planGuard');
 const ifoodAPI = require('../services/ifood-api-complete');
 const ifoodDistributed = require('../services/ifood-distributed');
 const food99 = require('../services/food99');
@@ -13,7 +13,7 @@ const router = express.Router();
 const rawMenuCache = new Map(); // `${restaurant_id}:99food` -> { raw, at }
 
 // GET /api/v1/admin/menu/restaurants
-router.get('/restaurants', authenticateToken, requireAdmin, async (req, res) => {
+router.get('/restaurants', authenticateToken, requireActiveUser, requireAdmin, async (req, res) => {
   try {
     const restaurants = await pool.query(
       `SELECT r.id, r.name, r.user_id,
@@ -33,12 +33,20 @@ router.get('/restaurants', authenticateToken, requireAdmin, async (req, res) => 
 });
 
 // POST /api/v1/admin/menu/fetch — Buscar cardápio via API real
-router.post('/fetch', authenticateToken, requireCapability('menu_sync'), async (req, res) => {
+router.post('/fetch', authenticateToken, requireActiveUser, requireCapability('menu_sync'), async (req, res) => {
   try {
     const { restaurant_id, platform } = req.body;
-    
+
     if (!restaurant_id || !platform) {
       return res.status(400).json({ error: 'restaurant_id e platform são obrigatórios' });
+    }
+
+    const ownsRestaurant = await pool.query(
+      `SELECT 1 FROM restaurants WHERE id = $1 AND user_id = $2`,
+      [restaurant_id, req.user.id]
+    );
+    if (ownsRestaurant.rows.length === 0) {
+      return res.status(403).json({ error: 'forbidden' });
     }
 
     console.log(`[menu fetch] Buscando cardápio: restaurante=${restaurant_id}, plataforma=${platform}`);
@@ -142,12 +150,20 @@ router.post('/fetch', authenticateToken, requireCapability('menu_sync'), async (
 });
 
 // POST /api/v1/admin/menu/copy
-router.post('/copy', authenticateToken, requireCapability('menu_sync'), async (req, res) => {
+router.post('/copy', authenticateToken, requireActiveUser, requireCapability('menu_sync'), async (req, res) => {
   try {
     const { from_restaurant_id, to_restaurant_id, from_platform, to_platform, selected_items } = req.body;
-    
+
     if (!from_restaurant_id || !to_restaurant_id) {
       return res.status(400).json({ error: 'Restaurantes de origem e destino são obrigatórios' });
+    }
+
+    const ownership = await pool.query(
+      `SELECT id FROM restaurants WHERE id = ANY($1::int[]) AND user_id = $2`,
+      [[from_restaurant_id, to_restaurant_id], req.user.id]
+    );
+    if (ownership.rows.length < 2) {
+      return res.status(403).json({ error: 'forbidden' });
     }
 
     const itemsCount = selected_items?.length || 0;

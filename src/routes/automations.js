@@ -2,11 +2,12 @@ const express = require('express');
 const pool = require('../db/postgres');
 const { tryAutoAccept, ensureAutomationSchema } = require('../services/autoAccept');
 const { authenticateToken } = require('../middleware/auth');
-const { requireCapability } = require('../middleware/planGuard');
+const { requireCapability, requireActiveUser } = require('../middleware/planGuard');
 const router = express.Router();
 
 // Aplicar autenticação em todas as rotas
 router.use(authenticateToken);
+router.use(requireActiveUser);
 
 router.get('/', async (req, res) => {
   try {
