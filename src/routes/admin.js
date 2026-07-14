@@ -58,7 +58,7 @@ router.put('/users/:id', async (req, res) => {
   const { name, email, plan, active, payment_status, role, is_admin, plan_expires_at } = req.body;
   try {
     if (plan) {
-      const ok = await pool.query('SELECT 1 FROM plans WHERE slug = $1', [plan]);
+      const ok = await pool.query('SELECT 1 FROM plans WHERE slug = $1 AND active = true', [plan]);
       if (ok.rows.length === 0) return res.status(400).json({ error: 'Plano inválido' });
     }
     const result = await pool.query(

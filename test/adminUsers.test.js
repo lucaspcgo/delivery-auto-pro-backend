@@ -65,5 +65,8 @@ describe('admin PUT /users/:id — reativação e validação de plano', () => {
       .send({ plan: 'inexistente' });
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: 'Plano inválido' });
+    // Verify that the WHERE clause includes AND active = true
+    const [query] = pool.query.mock.calls[0];
+    expect(query).toContain('AND active = true');
   });
 });
