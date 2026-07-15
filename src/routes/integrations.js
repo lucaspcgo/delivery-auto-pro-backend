@@ -139,10 +139,26 @@ router.post('/ifood/authorize/start', async (req, res) => {
 
 // Passo 2: após o dono autorizar no portal, troca o código por tokens e
 // cadastra automaticamente as lojas autorizadas
+// Mensagem quando a autorização foi salva mas as lojas ainda não propagaram.
+// O iFood leva até 10 min para propagar novas permissões de merchant.
+const IFOOD_PENDING_MSG = 'Autorização concluída. As lojas podem levar até 10 minutos para aparecer.';
+
 router.post('/ifood/authorize/complete', async (req, res) => {
+  const { authorizationCode } = req.body;
+
+  // 1) Concluir a autorização (salva o refresh_token). Só ISTO falhando é erro
+  //    real (código errado/expirado, etc.).
   try {
-    const { authorizationCode } = req.body;
     await ifoodDistributed.completeAuthorization(req.user.id, authorizationCode);
+  } catch (err) {
+    console.error('[ifood-auth complete] erro na autorização:', err.message);
+    return res.status(400).json({ error: 'Erro ao concluir autorização', details: err.message });
+  }
+
+  // 2) Sincronizar as lojas autorizadas. A permissão pode levar até 10 min para
+  //    propagar — se as lojas ainda não aparecem (lista vazia ou falha aqui), a
+  //    autorização JÁ foi salva; devolvemos sucesso com aviso, não erro.
+  try {
     const token = await ifoodDistributed.getAccessToken(req.user.id);
     const merchants = await ifoodAPI.getMerchants(token);
 
@@ -182,10 +198,14 @@ router.post('/ifood/authorize/complete', async (req, res) => {
     }
 
     console.log(`[ifood-auth] user ${req.user.id} autorizou ${connected.length} loja(s)`);
+    if (connected.length === 0) {
+      return res.json({ success: true, connected: [], pending: true, message: IFOOD_PENDING_MSG });
+    }
     return res.json({ success: true, connected });
-  } catch (err) {
-    console.error('[ifood-auth complete] erro:', err.message);
-    return res.status(400).json({ error: 'Erro ao concluir autorização', details: err.message });
+  } catch (syncErr) {
+    // Autorização OK; só o sync de lojas ficou pendente (propagação).
+    console.warn('[ifood-auth complete] autorizado, sync de lojas pendente:', syncErr.message);
+    return res.json({ success: true, connected: [], pending: true, message: IFOOD_PENDING_MSG });
   }
 });
 
