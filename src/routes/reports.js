@@ -1,6 +1,10 @@
 const express = require('express');
 const pool = require('../db/postgres');
+const { authenticateToken } = require('../middleware/auth');
 const router = express.Router();
+
+// Todas as rotas de relatório exigem login.
+router.use(authenticateToken);
 
 // GET /api/v1/reports/summary — relatório geral
 router.get('/summary', async (req, res) => {
@@ -16,6 +20,11 @@ router.get('/summary', async (req, res) => {
     if (platform && platform !== 'all') { platformFilter = ` AND o.platform = $${idx++}`; params.push(platform); }
     if (restaurant_id) { restaurantFilter = ` AND o.app_shop_id IN (SELECT COALESCE(platform_merchant_id, app_shop_id) FROM restaurant_platforms WHERE restaurant_id = $${idx++})`; params.push(restaurant_id); }
 
+    // Isolamento por usuário: usuário comum só vê os próprios pedidos.
+    // Admin vê tudo (sem filtro de user_id).
+    let userFilter = '';
+    if (!req.user.is_admin) { userFilter = ` AND o.user_id = $${idx++}`; params.push(req.user.id); }
+
     const dateFilter = `DATE(o.created_at AT TIME ZONE 'America/Sao_Paulo') >= $1 AND DATE(o.created_at AT TIME ZONE 'America/Sao_Paulo') <= $2`;
 
     // Métricas gerais
@@ -25,14 +34,14 @@ router.get('/summary', async (req, res) => {
               COUNT(CASE WHEN status='confirmed' OR status='ready' THEN 1 END) as aceitos,
               COUNT(CASE WHEN status='cancelled' THEN 1 END) as cancelados,
               COUNT(CASE WHEN status='100' THEN 1 END) as pendentes
-       FROM orders o WHERE ${dateFilter}${platformFilter}${restaurantFilter}`, params
+       FROM orders o WHERE ${dateFilter}${platformFilter}${restaurantFilter}${userFilter}`, params
     );
 
     // Por plataforma
     const porPlataforma = await pool.query(
       `SELECT platform, COUNT(*) as pedidos, COALESCE(SUM(total_price),0) as faturamento,
               COALESCE(AVG(total_price),0) as ticket_medio
-       FROM orders o WHERE ${dateFilter}${platformFilter}${restaurantFilter}
+       FROM orders o WHERE ${dateFilter}${platformFilter}${restaurantFilter}${userFilter}
        GROUP BY platform ORDER BY pedidos DESC`, params
     );
 
@@ -40,14 +49,14 @@ router.get('/summary', async (req, res) => {
     const porDia = await pool.query(
       `SELECT DATE(o.created_at AT TIME ZONE 'America/Sao_Paulo') as dia,
               COUNT(*) as pedidos, COALESCE(SUM(total_price),0) as faturamento
-       FROM orders o WHERE ${dateFilter}${platformFilter}${restaurantFilter}
+       FROM orders o WHERE ${dateFilter}${platformFilter}${restaurantFilter}${userFilter}
        GROUP BY DATE(o.created_at AT TIME ZONE 'America/Sao_Paulo') ORDER BY dia ASC`, params
     );
 
     // Por status
     const porStatus = await pool.query(
       `SELECT status, COUNT(*) as total FROM orders o
-       WHERE ${dateFilter}${platformFilter}${restaurantFilter}
+       WHERE ${dateFilter}${platformFilter}${restaurantFilter}${userFilter}
        GROUP BY status ORDER BY total DESC`, params
     );
 
@@ -56,7 +65,7 @@ router.get('/summary', async (req, res) => {
       `SELECT item->>'name' as nome, SUM((item->>'amount')::int) as quantidade,
               SUM((item->>'total_price')::numeric / 100) as valor_total
        FROM orders o, jsonb_array_elements(items) as item
-       WHERE ${dateFilter}${platformFilter}${restaurantFilter}
+       WHERE ${dateFilter}${platformFilter}${restaurantFilter}${userFilter}
        GROUP BY item->>'name' ORDER BY quantidade DESC LIMIT 10`, params
     );
 
@@ -64,19 +73,21 @@ router.get('/summary', async (req, res) => {
     const porHora = await pool.query(
       `SELECT EXTRACT(HOUR FROM o.created_at AT TIME ZONE 'America/Sao_Paulo') as hora,
               COUNT(*) as pedidos, COALESCE(SUM(total_price),0) as faturamento
-       FROM orders o WHERE ${dateFilter}${platformFilter}${restaurantFilter}
+       FROM orders o WHERE ${dateFilter}${platformFilter}${restaurantFilter}${userFilter}
        GROUP BY hora ORDER BY hora ASC`, params
     );
 
     // Por restaurante
     const porRestaurante = await pool.query(
       `SELECT r.name as restaurante, o.app_shop_id, o.platform,
+              u.name as usuario_nome, u.email as usuario_email,
               COUNT(*) as pedidos, COALESCE(SUM(o.total_price),0) as faturamento
        FROM orders o
        LEFT JOIN restaurant_platforms rp ON (rp.platform_merchant_id = o.app_shop_id OR rp.app_shop_id = o.app_shop_id) AND rp.platform = o.platform
        LEFT JOIN restaurants r ON r.id = rp.restaurant_id
-       WHERE ${dateFilter}${platformFilter}${restaurantFilter}
-       GROUP BY r.name, o.app_shop_id, o.platform ORDER BY pedidos DESC`, params
+       LEFT JOIN users u ON u.id = r.user_id
+       WHERE ${dateFilter}${platformFilter}${restaurantFilter}${userFilter}
+       GROUP BY r.name, o.app_shop_id, o.platform, u.name, u.email ORDER BY pedidos DESC`, params
     );
 
     const g = geral.rows[0];
@@ -125,6 +136,8 @@ router.get('/summary', async (req, res) => {
       por_restaurante: porRestaurante.rows.map(r => ({
         restaurante: r.restaurante || r.app_shop_id || 'Não identificado',
         platform: r.platform,
+        // Dono da loja — útil pro admin ver qual usuário está vinculado.
+        usuario: r.usuario_nome || r.usuario_email || null,
         pedidos: parseInt(r.pedidos),
         faturamento: parseFloat(parseFloat(r.faturamento).toFixed(2))
       }))
