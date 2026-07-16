@@ -31,9 +31,9 @@ router.get('/summary', async (req, res) => {
     const geral = await pool.query(
       `SELECT COUNT(*) as total_pedidos, COALESCE(SUM(total_price),0) as faturamento_total,
               COALESCE(AVG(total_price),0) as ticket_medio,
-              COUNT(CASE WHEN status='confirmed' OR status='ready' THEN 1 END) as aceitos,
+              COUNT(CASE WHEN status IN ('confirmed','ready','dispatched','delivered') THEN 1 END) as aceitos,
               COUNT(CASE WHEN status='cancelled' THEN 1 END) as cancelados,
-              COUNT(CASE WHEN status='100' THEN 1 END) as pendentes
+              COUNT(CASE WHEN status IN ('100','pending') THEN 1 END) as pendentes
        FROM orders o WHERE ${dateFilter}${platformFilter}${restaurantFilter}${userFilter}`, params
     );
 
