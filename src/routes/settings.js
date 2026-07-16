@@ -73,13 +73,28 @@ router.put('/company', async (req, res) => {
 });
 
 // PUT /api/v1/settings/plan — atualizar plano
+// IMPORTANTE: usuário comum NÃO pode subir para plano pago por aqui (bypass de
+// pagamento). Upgrade pago só via checkout (após pagamento confirmado) ou pelo
+// admin. Downgrade para plano gratuito é permitido.
 router.put('/plan', async (req, res) => {
   const { plan } = req.body;
   try {
-    const exists = await pool.query('SELECT 1 FROM plans WHERE slug = $1 AND active = true', [plan]);
-    if (exists.rows.length === 0) {
+    const planRow = await pool.query('SELECT is_free, price FROM plans WHERE slug = $1 AND active = true', [plan]);
+    if (planRow.rows.length === 0) {
       return res.status(400).json({ error: 'Plano inválido' });
     }
+    const selected = planRow.rows[0];
+    const isPaid = !selected.is_free && Number(selected.price) > 0;
+
+    // Só admin pode atribuir plano pago diretamente. Usuário comum precisa pagar.
+    if (isPaid && !req.user.is_admin) {
+      return res.status(402).json({
+        error: 'Para assinar um plano pago é necessário concluir o pagamento.',
+        requires_payment: true,
+        redirect: '/checkout'
+      });
+    }
+
     const result = await pool.query(
       `UPDATE users SET plan=$1, updated_at=now() WHERE id=$2 RETURNING id, plan`,
       [plan, req.user.id]
