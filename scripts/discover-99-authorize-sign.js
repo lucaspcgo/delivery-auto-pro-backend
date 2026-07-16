@@ -22,6 +22,7 @@ if (!SECRET) {
 const SAMPLES = [
   { app_id: '5764607554401863557', enterprise_name: 'Bs Solucoes', uid: '646635983587325546', time: '1784141322', sign: 'e8b6abf1c32fe171559fdee5231081c6' },
   { app_id: '5764607554401863557', enterprise_name: 'Bs Solucoes', uid: '646635983587325546', time: '1784207142', sign: '8e8892ff793173233336d9ad1e7e52f3' },
+  { app_id: '5764607554401863557', enterprise_name: 'Bs Solucoes', uid: '646635983587325546', time: '1783378247', sign: 'a95b43f6ccebbc1f32df5f257b314b4b' },
 ];
 
 // enterprise_name pode entrar de várias formas na string a assinar.
