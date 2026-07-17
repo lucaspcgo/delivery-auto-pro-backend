@@ -239,6 +239,28 @@ router.get('/ifood/authorize/status', async (req, res) => {
   }
 });
 
+// Lista as lojas iFood conectadas do usuário (nome + status + merchant),
+// para a tela exibir igual ao 99Food ("LOJAS CONECTADAS ... Gerenciar").
+router.get('/ifood/stores', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT rp.id, r.id AS restaurant_id, r.name,
+              rp.platform_merchant_id AS merchant_id, rp.status,
+              COALESCE(rp.automation_enabled, true) AS automation_enabled,
+              rp.ifood_auth_id
+       FROM restaurant_platforms rp
+       JOIN restaurants r ON r.id = rp.restaurant_id
+       WHERE rp.platform = 'ifood' AND rp.user_id = $1
+       ORDER BY r.name ASC`,
+      [req.user.id]
+    );
+    return res.json(result.rows);
+  } catch (err) {
+    console.error('[ifood stores] erro:', err.message);
+    return res.status(500).json({ error: 'Erro ao listar lojas iFood', details: err.message });
+  }
+});
+
 // Retorna a URL de autorização do app 99Food (para o botão "Autorizar")
 router.get('/99food/authorize-url', (req, res) => {
   const url = process.env.FOOD99_AUTHORIZE_URL || null;
