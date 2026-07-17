@@ -105,10 +105,11 @@ async function migrate() {
   await pool.query(`ALTER TABLE restaurant_platforms ADD COLUMN IF NOT EXISTS ifood_auth_id BIGINT`);
 
   // Liga lojas iFood já existentes ao acesso (único) do usuário migrado.
+  // rp.user_id é UUID e ifood_auth.user_id é TEXT — cast p/ comparar.
   await pool.query(`
     UPDATE restaurant_platforms rp SET ifood_auth_id = a.id
     FROM ifood_auth a
-    WHERE rp.platform = 'ifood' AND rp.ifood_auth_id IS NULL AND a.user_id = rp.user_id
+    WHERE rp.platform = 'ifood' AND rp.ifood_auth_id IS NULL AND a.user_id = rp.user_id::text
   `);
 }
 
@@ -245,7 +246,7 @@ async function getAccessTokenByMerchant(merchantId) {
     row = (await pool.query(
       `SELECT a.id, a.access_token, a.refresh_token, a.expires_at
        FROM restaurant_platforms rp
-       JOIN ifood_auth a ON a.user_id = rp.user_id
+       JOIN ifood_auth a ON a.user_id = rp.user_id::text
        WHERE rp.platform = 'ifood' AND rp.platform_merchant_id = $1
        ORDER BY a.updated_at DESC LIMIT 1`,
       [String(merchantId)]
