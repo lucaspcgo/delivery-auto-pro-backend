@@ -10,22 +10,24 @@ const POLL_INTERVAL_MS = 30000; // iFood recomenda 1 chamada a cada 30s
 let timer = null;
 
 async function pollOnce() {
-  let users;
+  let auths;
   try {
-    users = await ifoodDistributed.listAuthorizedUsers();
+    // MULTI-CONTA: cada autorização (conta iFood) tem sua própria fila de
+    // eventos, então consultamos uma por uma com o token daquele acesso.
+    auths = await ifoodDistributed.listAuthorizations();
   } catch (err) {
-    console.error('[ifood-poller] erro ao listar usuários autorizados:', err.message);
+    console.error('[ifood-poller] erro ao listar autorizações:', err.message);
     return;
   }
-  if (!users.length) return;
+  if (!auths.length) return;
 
-  for (const userId of users) {
+  for (const auth of auths) {
     try {
-      const token = await ifoodDistributed.getAccessToken(userId);
+      const token = await ifoodDistributed.getAccessTokenByAuthId(auth.id);
       const events = await ifoodDistributed.pollEvents(token);
       if (!events.length) continue;
 
-      console.log(`[ifood-poller] user ${userId}: ${events.length} evento(s)`);
+      console.log(`[ifood-poller] acesso ${auth.id} (user ${auth.user_id}): ${events.length} evento(s)`);
       for (const ev of events) {
         try { await processEvent(ev); }
         catch (e) { console.error(`[ifood-poller] erro ao processar evento:`, e.message); }
@@ -33,7 +35,7 @@ async function pollOnce() {
       // Confirma o recebimento (mesmo se algum falhou, para não travar a fila)
       await ifoodDistributed.acknowledgeEvents(token, events.map(e => e.id).filter(Boolean));
     } catch (err) {
-      console.error(`[ifood-poller] user ${userId}:`, err.message);
+      console.error(`[ifood-poller] acesso ${auth.id}:`, err.message);
     }
   }
 }

@@ -41,25 +41,75 @@ function request({ path, method = 'POST', body = null, token = null }) {
   });
 }
 
-// Cria a tabela de tokens se ainda não existir (idempotente).
+// Cria/migra o schema de autorização do iFood (idempotente).
+//
+// MULTI-CONTA: antes era UMA autorização por usuário (ifood_auth.user_id era
+// PRIMARY KEY). Agora um usuário pode ter VÁRIAS autorizações (contas iFood
+// diferentes), cada uma com seu próprio refresh_token. A tabela passa a ter
+// `id` como PK; cada loja (restaurant_platforms) aponta para o acesso dono do
+// seu token via `ifood_auth_id`. O código "pendente" (fluxo de autorização em
+// andamento) vai para uma tabela separada, 1 por usuário.
 let schemaReady = null;
 function ensureSchema() {
   if (!schemaReady) {
-    schemaReady = pool.query(`
-      CREATE TABLE IF NOT EXISTS ifood_auth (
-        user_id            TEXT PRIMARY KEY,
-        access_token       TEXT,
-        refresh_token      TEXT,
-        expires_at         TIMESTAMPTZ,
-        pending_code       TEXT,
-        pending_verifier   TEXT,
-        pending_expires_at TIMESTAMPTZ,
-        created_at         TIMESTAMPTZ DEFAULT now(),
-        updated_at         TIMESTAMPTZ DEFAULT now()
-      )
-    `).catch(err => { schemaReady = null; throw err; });
+    schemaReady = migrate().catch(err => { schemaReady = null; throw err; });
   }
   return schemaReady;
+}
+
+async function migrate() {
+  // Tabela de "pendências" de autorização (código/verifier em andamento).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ifood_auth_pending (
+      user_id            TEXT PRIMARY KEY,
+      pending_code       TEXT,
+      pending_verifier   TEXT,
+      pending_expires_at TIMESTAMPTZ,
+      updated_at         TIMESTAMPTZ DEFAULT now()
+    )
+  `);
+
+  // Cria (instalações novas) ou migra (instalações antigas com user_id PK) a
+  // tabela ifood_auth para o modelo multi-conta com id como PK.
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ifood_auth') THEN
+        CREATE TABLE ifood_auth (
+          id            BIGSERIAL PRIMARY KEY,
+          user_id       TEXT NOT NULL,
+          access_token  TEXT,
+          refresh_token TEXT,
+          expires_at    TIMESTAMPTZ,
+          created_at    TIMESTAMPTZ DEFAULT now(),
+          updated_at    TIMESTAMPTZ DEFAULT now()
+        );
+      ELSIF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'ifood_auth' AND column_name = 'id') THEN
+        -- Preserva pendências antigas
+        INSERT INTO ifood_auth_pending (user_id, pending_code, pending_verifier, pending_expires_at)
+          SELECT user_id, pending_code, pending_verifier, pending_expires_at
+          FROM ifood_auth WHERE pending_verifier IS NOT NULL
+          ON CONFLICT (user_id) DO NOTHING;
+        -- Troca a PK de user_id para id (mantém as linhas/tokens existentes)
+        ALTER TABLE ifood_auth DROP CONSTRAINT IF EXISTS ifood_auth_pkey;
+        ALTER TABLE ifood_auth ADD COLUMN id BIGSERIAL PRIMARY KEY;
+        ALTER TABLE ifood_auth DROP COLUMN IF EXISTS pending_code;
+        ALTER TABLE ifood_auth DROP COLUMN IF EXISTS pending_verifier;
+        ALTER TABLE ifood_auth DROP COLUMN IF EXISTS pending_expires_at;
+      END IF;
+    END $$;
+  `);
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_ifood_auth_user ON ifood_auth(user_id)`);
+  await pool.query(`ALTER TABLE restaurant_platforms ADD COLUMN IF NOT EXISTS ifood_auth_id BIGINT`);
+
+  // Liga lojas iFood já existentes ao acesso (único) do usuário migrado.
+  await pool.query(`
+    UPDATE restaurant_platforms rp SET ifood_auth_id = a.id
+    FROM ifood_auth a
+    WHERE rp.platform = 'ifood' AND rp.ifood_auth_id IS NULL AND a.user_id = rp.user_id
+  `);
 }
 
 // Passo 1: gera o código que o dono da loja vai digitar no portal do iFood.
@@ -75,7 +125,7 @@ async function startAuthorization(userId) {
 
   const expiresAt = new Date(Date.now() + (data.expiresIn || 600) * 1000);
   await pool.query(
-    `INSERT INTO ifood_auth (user_id, pending_code, pending_verifier, pending_expires_at, updated_at)
+    `INSERT INTO ifood_auth_pending (user_id, pending_code, pending_verifier, pending_expires_at, updated_at)
      VALUES ($1, $2, $3, $4, now())
      ON CONFLICT (user_id) DO UPDATE SET
        pending_code = EXCLUDED.pending_code,
@@ -102,7 +152,7 @@ async function completeAuthorization(userId, authorizationCode) {
     throw new Error('Código de autorização não informado (copie o código que o portal do iFood devolveu).');
   }
   const row = (await pool.query(
-    `SELECT pending_verifier, pending_expires_at FROM ifood_auth WHERE user_id = $1`,
+    `SELECT pending_verifier, pending_expires_at FROM ifood_auth_pending WHERE user_id = $1`,
     [String(userId)]
   )).rows[0];
 
@@ -126,20 +176,21 @@ async function completeAuthorization(userId, authorizationCode) {
   // data: { accessToken, refreshToken, expiresIn, type }
 
   const expiresAt = new Date(Date.now() + (data.expiresIn || 3600) * 1000);
-  await pool.query(
-    `UPDATE ifood_auth SET
-       access_token = $2, refresh_token = $3, expires_at = $4,
-       pending_code = NULL, pending_verifier = NULL, pending_expires_at = NULL,
-       updated_at = now()
-     WHERE user_id = $1`,
+  // MULTI-CONTA: cada autorização vira uma NOVA linha (um novo acesso/token).
+  // Lojas duplicadas de uma re-autorização da MESMA conta são reconciliadas
+  // depois, ao vincular os merchants (ver /ifood/authorize/complete).
+  const inserted = await pool.query(
+    `INSERT INTO ifood_auth (user_id, access_token, refresh_token, expires_at, updated_at)
+     VALUES ($1, $2, $3, $4, now()) RETURNING id`,
     [String(userId), data.accessToken, data.refreshToken, expiresAt]
   );
+  await pool.query(`DELETE FROM ifood_auth_pending WHERE user_id = $1`, [String(userId)]);
 
-  return { accessToken: data.accessToken };
+  return { accessToken: data.accessToken, authId: inserted.rows[0].id };
 }
 
-// Renova o access_token usando o refresh_token guardado.
-async function refreshToken(userId, refresh) {
+// Renova o access_token de UMA autorização (por id) usando seu refresh_token.
+async function refreshToken(authId, refresh) {
   const body = querystring.stringify({
     grantType: 'refresh_token',
     clientId: clientId(),
@@ -150,29 +201,73 @@ async function refreshToken(userId, refresh) {
   const expiresAt = new Date(Date.now() + (data.expiresIn || 3600) * 1000);
   await pool.query(
     `UPDATE ifood_auth SET access_token = $2, refresh_token = $3, expires_at = $4, updated_at = now()
-     WHERE user_id = $1`,
-    [String(userId), data.accessToken, data.refreshToken || refresh, expiresAt]
+     WHERE id = $1`,
+    [authId, data.accessToken, data.refreshToken || refresh, expiresAt]
   );
   return data.accessToken;
 }
 
-// Retorna um access_token válido para o usuário, renovando se necessário.
-async function getAccessToken(userId) {
-  await ensureSchema();
-  const row = (await pool.query(
-    `SELECT access_token, refresh_token, expires_at FROM ifood_auth WHERE user_id = $1`,
-    [String(userId)]
-  )).rows[0];
-
+// Dado uma linha de acesso, devolve um token válido (renovando se necessário).
+async function tokenFromRow(row) {
   if (!row || !row.refresh_token) {
     throw new Error('Loja iFood ainda não autorizada. Conecte a loja pelo fluxo de autorização.');
   }
-
-  // Usa o token atual se ainda válido (margem de 60s)
   if (row.access_token && row.expires_at && new Date(row.expires_at).getTime() - 60000 > Date.now()) {
     return row.access_token;
   }
-  return refreshToken(userId, row.refresh_token);
+  return refreshToken(row.id, row.refresh_token);
+}
+
+// Token válido de uma autorização específica (por id).
+async function getAccessTokenByAuthId(authId) {
+  await ensureSchema();
+  const row = (await pool.query(
+    `SELECT id, access_token, refresh_token, expires_at FROM ifood_auth WHERE id = $1`,
+    [authId]
+  )).rows[0];
+  return tokenFromRow(row);
+}
+
+// Token válido da loja (merchant): usa o acesso vinculado à loja. Se a loja
+// ainda não tiver vínculo (ifood_auth_id nulo — legado), cai para o acesso mais
+// recente do usuário dono da loja.
+async function getAccessTokenByMerchant(merchantId) {
+  await ensureSchema();
+  let row = (await pool.query(
+    `SELECT a.id, a.access_token, a.refresh_token, a.expires_at
+     FROM restaurant_platforms rp
+     JOIN ifood_auth a ON a.id = rp.ifood_auth_id
+     WHERE rp.platform = 'ifood' AND rp.platform_merchant_id = $1
+     LIMIT 1`,
+    [String(merchantId)]
+  )).rows[0];
+  if (!row) {
+    row = (await pool.query(
+      `SELECT a.id, a.access_token, a.refresh_token, a.expires_at
+       FROM restaurant_platforms rp
+       JOIN ifood_auth a ON a.user_id = rp.user_id
+       WHERE rp.platform = 'ifood' AND rp.platform_merchant_id = $1
+       ORDER BY a.updated_at DESC LIMIT 1`,
+      [String(merchantId)]
+    )).rows[0];
+  }
+  if (!row) {
+    throw new Error(`Loja iFood ${merchantId} sem acesso autorizado. Reconecte a loja.`);
+  }
+  return tokenFromRow(row);
+}
+
+// Compatibilidade: token válido do usuário (acesso mais recente). Usado como
+// fallback quando não há merchant em contexto.
+async function getAccessToken(userId) {
+  await ensureSchema();
+  const row = (await pool.query(
+    `SELECT id, access_token, refresh_token, expires_at FROM ifood_auth
+     WHERE user_id = $1 AND refresh_token IS NOT NULL
+     ORDER BY updated_at DESC LIMIT 1`,
+    [String(userId)]
+  )).rows[0];
+  return tokenFromRow(row);
 }
 
 // Request autenticado para as APIs de pedido (JSON + Bearer). Aceita 200/202.
@@ -199,49 +294,80 @@ function orderRequest(token, method, path, jsonBody) {
   });
 }
 
-// ===== Ações de pedido usando o token da loja autorizada =====
-async function getOrderDetails(userId, orderId) {
-  const token = await getAccessToken(userId);
+// ===== Ações de pedido usando o token da LOJA (merchantId) autorizada =====
+// merchantId identifica a loja e, por consequência, qual acesso/token usar
+// (multi-conta). Assim cada pedido é aceito/confirmado com o token certo.
+async function getOrderDetails(merchantId, orderId) {
+  const token = await getAccessTokenByMerchant(merchantId);
   return orderRequest(token, 'GET', `/order/v1.0/orders/${orderId}`, null);
 }
 
-async function confirmOrder(userId, orderId) {
-  const token = await getAccessToken(userId);
+async function confirmOrder(merchantId, orderId) {
+  const token = await getAccessTokenByMerchant(merchantId);
   return orderRequest(token, 'POST', `/order/v1.0/orders/${orderId}/confirm`, null);
 }
 
-async function readyToPickup(userId, orderId) {
-  const token = await getAccessToken(userId);
+async function readyToPickup(merchantId, orderId) {
+  const token = await getAccessTokenByMerchant(merchantId);
   return orderRequest(token, 'POST', `/order/v1.0/orders/${orderId}/readyToPickup`, null);
 }
 
-async function dispatchOrder(userId, orderId) {
-  const token = await getAccessToken(userId);
+async function dispatchOrder(merchantId, orderId) {
+  const token = await getAccessTokenByMerchant(merchantId);
   return orderRequest(token, 'POST', `/order/v1.0/orders/${orderId}/dispatch`, null);
 }
 
-async function cancelOrder(userId, orderId, reason) {
-  const token = await getAccessToken(userId);
+async function cancelOrder(merchantId, orderId, reason) {
+  const token = await getAccessTokenByMerchant(merchantId);
   return orderRequest(token, 'POST', `/order/v1.0/orders/${orderId}/requestCancellation`,
     { reason: reason || 'INTERNAL_DIFFICULTIES', cancellationCode: '501' });
 }
 
-// Indica se o usuário já tem uma autorização válida
+// Indica se o usuário já tem ao menos uma autorização válida
 async function isAuthorized(userId) {
   await ensureSchema();
   const row = (await pool.query(
-    `SELECT refresh_token FROM ifood_auth WHERE user_id = $1`, [String(userId)]
+    `SELECT 1 FROM ifood_auth WHERE user_id = $1 AND refresh_token IS NOT NULL LIMIT 1`,
+    [String(userId)]
   )).rows[0];
-  return !!(row && row.refresh_token);
+  return !!row;
 }
 
-// Lista os user_ids que já autorizaram alguma loja iFood (para o polling)
-async function listAuthorizedUsers() {
+// Lista TODAS as autorizações válidas (para o polling — cada conta iFood tem
+// sua própria fila de eventos, então o poller consulta uma por uma).
+async function listAuthorizations() {
   await ensureSchema();
   const rows = (await pool.query(
-    `SELECT user_id FROM ifood_auth WHERE refresh_token IS NOT NULL`
+    `SELECT id, user_id FROM ifood_auth WHERE refresh_token IS NOT NULL`
   )).rows;
-  return rows.map(r => r.user_id);
+  return rows;
+}
+
+// Quantidade de acessos (contas) iFood de um usuário.
+async function countAuthorizations(userId) {
+  await ensureSchema();
+  const r = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM ifood_auth WHERE user_id = $1 AND refresh_token IS NOT NULL`,
+    [String(userId)]
+  );
+  return r.rows[0].n;
+}
+
+// Remove acessos "órfãos" do usuário (sem nenhuma loja vinculada), exceto o
+// acesso recém-criado (keepAuthId). Usado após vincular merchants para
+// reconciliar re-autorização da MESMA conta (as lojas migram para o acesso
+// novo e o antigo fica órfão).
+async function pruneOrphanAuths(userId, keepAuthId) {
+  await ensureSchema();
+  await pool.query(
+    `DELETE FROM ifood_auth a
+     WHERE a.user_id = $1 AND a.id <> $2
+       AND NOT EXISTS (
+         SELECT 1 FROM restaurant_platforms rp
+         WHERE rp.platform = 'ifood' AND rp.ifood_auth_id = a.id
+       )`,
+    [String(userId), keepAuthId]
+  );
 }
 
 // Busca eventos de pedido pendentes (polling). Retorna [] se não houver (HTTP 204).
@@ -261,8 +387,12 @@ module.exports = {
   startAuthorization,
   completeAuthorization,
   getAccessToken,
+  getAccessTokenByAuthId,
+  getAccessTokenByMerchant,
   isAuthorized,
-  listAuthorizedUsers,
+  listAuthorizations,
+  countAuthorizations,
+  pruneOrphanAuths,
   pollEvents,
   acknowledgeEvents,
   getOrderDetails,

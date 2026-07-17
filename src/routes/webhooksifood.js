@@ -68,7 +68,7 @@ router.post('/:orderId/confirm', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Acesso negado' });
     }
 
-    await ifoodDistributed.confirmOrder(req.user.id, orderId);
+    await ifoodDistributed.confirmOrder(order.rows[0].app_shop_id, orderId);
     await pool.query(`UPDATE orders SET status='confirmed', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
     console.log(`[ifood confirm] pedido ${orderId} confirmado (user: ${req.user.id})`);
     return res.json({ success: true, order: stageInfo('ifood', orderId, 'confirmed') });
@@ -92,7 +92,7 @@ router.post('/:orderId/cancel', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Acesso negado' });
     }
 
-    await ifoodDistributed.cancelOrder(req.user.id, orderId, reason);
+    await ifoodDistributed.cancelOrder(order.rows[0].app_shop_id, orderId, reason);
     await pool.query(`UPDATE orders SET status='cancelled', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
     console.log(`[ifood cancel] pedido ${orderId} cancelado (user: ${req.user.id})`);
     return res.json({ success: true, order: stageInfo('ifood', orderId, 'cancelled') });
@@ -115,7 +115,7 @@ router.post('/:orderId/ready', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Acesso negado' });
     }
 
-    await ifoodDistributed.readyToPickup(req.user.id, orderId);
+    await ifoodDistributed.readyToPickup(order.rows[0].app_shop_id, orderId);
     await pool.query(`UPDATE orders SET status='ready', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
     console.log(`[ifood ready] pedido ${orderId} pronto p/ retirada (user: ${req.user.id})`);
     return res.json({ success: true, order: stageInfo('ifood', orderId, 'ready') });
@@ -137,7 +137,7 @@ router.post('/:orderId/dispatch', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Acesso negado' });
     }
 
-    await ifoodDistributed.dispatchOrder(req.user.id, orderId);
+    await ifoodDistributed.dispatchOrder(order.rows[0].app_shop_id, orderId);
     await pool.query(`UPDATE orders SET status='dispatched', updated_at=now() WHERE platform='ifood' AND platform_order_id=$1 AND user_id=$2`, [orderId, req.user.id]);
     console.log(`[ifood dispatch] pedido ${orderId} saiu para entrega (user: ${req.user.id})`);
     return res.json({ success: true, order: stageInfo('ifood', orderId, 'dispatched') });

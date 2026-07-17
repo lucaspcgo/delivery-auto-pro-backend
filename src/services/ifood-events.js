@@ -29,7 +29,7 @@ async function processEvent(event) {
   }
 
   if (eventType === 'PLACED' || eventType === 'PLC') {
-    const order = await ifoodDistributed.getOrderDetails(userId, orderId);
+    const order = await ifoodDistributed.getOrderDetails(merchantId, orderId);
     const customerName = order.customer?.name || 'Cliente iFood';
     const customerPhone = order.customer?.phone?.number || null;
     const address = order.delivery?.deliveryAddress

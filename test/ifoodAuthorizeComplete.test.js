@@ -11,7 +11,10 @@ jest.mock('../src/middleware/auth', () => ({
 jest.mock('../src/services/ifood-distributed', () => ({
   completeAuthorization: jest.fn(),
   getAccessToken: jest.fn(),
+  getAccessTokenByAuthId: jest.fn(),
   isAuthorized: jest.fn(),
+  pruneOrphanAuths: jest.fn().mockResolvedValue(),
+  countAuthorizations: jest.fn().mockResolvedValue(1),
 }));
 jest.mock('../src/services/ifood-api-complete', () => ({
   getMerchants: jest.fn(),
@@ -43,8 +46,8 @@ test('código inválido/expirado (autorização falha) -> 400', async () => {
 });
 
 test('autorização OK mas lojas ainda não propagaram (getMerchants vazio) -> 200 pending', async () => {
-  ifoodDistributed.completeAuthorization.mockResolvedValue();
-  ifoodDistributed.getAccessToken.mockResolvedValue('tok');
+  ifoodDistributed.completeAuthorization.mockResolvedValue({ authId: 1 });
+  ifoodDistributed.getAccessTokenByAuthId.mockResolvedValue("tok");
   ifoodAPI.getMerchants.mockResolvedValue([]);
   const res = await post();
   expect(res.status).toBe(200);
@@ -53,8 +56,8 @@ test('autorização OK mas lojas ainda não propagaram (getMerchants vazio) -> 2
 });
 
 test('autorização OK mas sync falha (propagação) -> 200 pending, não 400', async () => {
-  ifoodDistributed.completeAuthorization.mockResolvedValue();
-  ifoodDistributed.getAccessToken.mockResolvedValue('tok');
+  ifoodDistributed.completeAuthorization.mockResolvedValue({ authId: 1 });
+  ifoodDistributed.getAccessTokenByAuthId.mockResolvedValue("tok");
   ifoodAPI.getMerchants.mockRejectedValue(new Error('403 forbidden to access merchant'));
   const res = await post();
   expect(res.status).toBe(200);
@@ -63,13 +66,14 @@ test('autorização OK mas sync falha (propagação) -> 200 pending, não 400', 
 });
 
 test('autorização OK e loja já disponível -> 200 connected com a loja', async () => {
-  ifoodDistributed.completeAuthorization.mockResolvedValue();
-  ifoodDistributed.getAccessToken.mockResolvedValue('tok');
+  ifoodDistributed.completeAuthorization.mockResolvedValue({ authId: 1 });
+  ifoodDistributed.getAccessTokenByAuthId.mockResolvedValue("tok");
   ifoodAPI.getMerchants.mockResolvedValue([{ id: '3883561', name: 'Loja Teste' }]);
   pool.query
-    .mockResolvedValueOnce({ rows: [] })            // SELECT existing
-    .mockResolvedValueOnce({ rows: [{ id: 99 }] })  // INSERT restaurants
-    .mockResolvedValueOnce({ rows: [] });           // INSERT restaurant_platforms
+    .mockResolvedValueOnce({ rows: [] })              // SELECT existing
+    .mockResolvedValueOnce({ rows: [{ id: 99 }] })    // INSERT restaurants
+    .mockResolvedValueOnce({ rows: [] })              // INSERT restaurant_platforms
+    .mockResolvedValueOnce({ rows: [{ n: 1 }] });     // COUNT total de lojas
   const res = await post();
   expect(res.status).toBe(200);
   expect(res.body.connected).toHaveLength(1);

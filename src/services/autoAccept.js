@@ -104,7 +104,8 @@ async function tryAutoAccept(platform, orderId, storeId, userId) {
           const authToken = await food99.getValidToken(storeId);
           await food99.confirmOrder(authToken, orderId);
         } else if (platform === 'ifood') {
-          await ifoodDistributed.confirmOrder(userId, orderId);
+          // storeId = merchantId (identifica a loja e o acesso/token certo)
+          await ifoodDistributed.confirmOrder(storeId, orderId);
         }
 
         await advanceIfForward(platform, orderId, userId, 'confirmed');
@@ -115,9 +116,9 @@ async function tryAutoAccept(platform, orderId, storeId, userId) {
         setTimeout(async () => {
           try {
             if (platform === 'ifood') {
-              await ifoodDistributed.readyToPickup(userId, orderId).catch(e =>
+              await ifoodDistributed.readyToPickup(storeId, orderId).catch(e =>
                 console.warn(`[auto-ready] readyToPickup ${orderId}: ${e.message}`));
-              await ifoodDistributed.dispatchOrder(userId, orderId).catch(e =>
+              await ifoodDistributed.dispatchOrder(storeId, orderId).catch(e =>
                 console.warn(`[auto-ready] dispatch ${orderId}: ${e.message}`));
               console.log(`[auto-ready] pedido ${orderId} (ifood) marcado como PRONTO e DESPACHADO`);
             } else if (platform === '99food') {

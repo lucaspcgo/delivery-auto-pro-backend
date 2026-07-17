@@ -147,9 +147,11 @@ router.post('/ifood/authorize/complete', async (req, res) => {
   const { authorizationCode } = req.body;
 
   // 1) Concluir a autorização (salva o refresh_token). Só ISTO falhando é erro
-  //    real (código errado/expirado, etc.).
+  //    real (código errado/expirado, etc.). Cada autorização vira um NOVO
+  //    acesso (authId) — permite múltiplas contas iFood por usuário.
+  let authId;
   try {
-    await ifoodDistributed.completeAuthorization(req.user.id, authorizationCode);
+    ({ authId } = await ifoodDistributed.completeAuthorization(req.user.id, authorizationCode));
   } catch (err) {
     console.error('[ifood-auth complete] erro na autorização:', err.message);
     return res.status(400).json({ error: 'Erro ao concluir autorização', details: err.message });
@@ -159,7 +161,7 @@ router.post('/ifood/authorize/complete', async (req, res) => {
   //    propagar — se as lojas ainda não aparecem (lista vazia ou falha aqui), a
   //    autorização JÁ foi salva; devolvemos sucesso com aviso, não erro.
   try {
-    const token = await ifoodDistributed.getAccessToken(req.user.id);
+    const token = await ifoodDistributed.getAccessTokenByAuthId(authId);
     const merchants = await ifoodAPI.getMerchants(token);
 
     const connected = [];
@@ -185,23 +187,36 @@ router.post('/ifood/authorize/complete', async (req, res) => {
         restaurantId = existing.rows[0].id;
       }
 
+      // Vincula a loja a ESTE acesso (ifood_auth_id) — é o que diz qual token
+      // usar pra aceitar/confirmar os pedidos dessa loja.
       await pool.query(
-        `INSERT INTO restaurant_platforms (restaurant_id, platform, platform_merchant_id, status, user_id)
-         VALUES ($1, 'ifood', $2, 'authorized', $3)
+        `INSERT INTO restaurant_platforms (restaurant_id, platform, platform_merchant_id, status, user_id, ifood_auth_id)
+         VALUES ($1, 'ifood', $2, 'authorized', $3, $4)
          ON CONFLICT (restaurant_id, platform) DO UPDATE SET
            platform_merchant_id = EXCLUDED.platform_merchant_id,
-           status = 'authorized', updated_at = now()`,
-        [restaurantId, merchantId, req.user.id]
+           status = 'authorized', ifood_auth_id = EXCLUDED.ifood_auth_id, updated_at = now()`,
+        [restaurantId, merchantId, req.user.id, authId]
       );
 
       connected.push({ id: merchantId, name: merchantName });
     }
 
-    console.log(`[ifood-auth] user ${req.user.id} autorizou ${connected.length} loja(s)`);
+    // Reconcilia re-autorização da MESMA conta: as lojas migraram para o acesso
+    // novo; remove acessos antigos que ficaram sem nenhuma loja.
+    await ifoodDistributed.pruneOrphanAuths(req.user.id, authId);
+
+    const totalStores = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM restaurant_platforms WHERE platform='ifood' AND user_id=$1 AND status='authorized'`,
+      [req.user.id]
+    );
+    const accounts = await ifoodDistributed.countAuthorizations(req.user.id);
+    const stores_count = totalStores.rows[0].n;
+
+    console.log(`[ifood-auth] user ${req.user.id} autorizou ${connected.length} loja(s) nesta conta; total ${stores_count} loja(s) em ${accounts} conta(s)`);
     if (connected.length === 0) {
-      return res.json({ success: true, connected: [], pending: true, message: IFOOD_PENDING_MSG });
+      return res.json({ success: true, connected: [], stores_count, accounts, pending: true, message: IFOOD_PENDING_MSG });
     }
-    return res.json({ success: true, connected });
+    return res.json({ success: true, connected, stores_count, accounts });
   } catch (syncErr) {
     // Autorização OK; só o sync de lojas ficou pendente (propagação).
     console.warn('[ifood-auth complete] autorizado, sync de lojas pendente:', syncErr.message);
@@ -213,7 +228,12 @@ router.post('/ifood/authorize/complete', async (req, res) => {
 router.get('/ifood/authorize/status', async (req, res) => {
   try {
     const authorized = await ifoodDistributed.isAuthorized(req.user.id);
-    return res.json({ authorized });
+    const accounts = await ifoodDistributed.countAuthorizations(req.user.id);
+    const totalStores = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM restaurant_platforms WHERE platform='ifood' AND user_id=$1 AND status='authorized'`,
+      [req.user.id]
+    );
+    return res.json({ authorized, accounts, stores_count: totalStores.rows[0].n });
   } catch (err) {
     return res.status(500).json({ error: 'Erro ao verificar status', details: err.message });
   }
