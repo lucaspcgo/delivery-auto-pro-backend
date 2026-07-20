@@ -120,10 +120,40 @@ function fromFood99(raw) {
     out.order_type = dt === 2 ? 'Retirada' : 'Entrega'; // padrão: entrega
   }
 
-  // Pagamento vem como código (pay_method/pay_type). Guardamos o código;
-  // o nome ("Dinheiro/Crédito") depende da tabela de códigos do 99Food.
+  // Pagamento: pay_type 1 = pago online (pré-pago) / 2 = pagar na entrega.
+  // pay_method/pay_channel são o método específico (tabela de códigos do 99Food).
   const payCode = raw.pay_method ?? raw.pay_type;
   if (payCode != null) out.payment_code = Number(payCode);
+  if (raw.pay_channel != null) out.payment_channel = Number(raw.pay_channel);
+  if (raw.pay_type != null) {
+    out.payment_when = Number(raw.pay_type) === 2 ? 'Pagar na entrega' : 'Pago online';
+  }
+
+  // Valores (99Food manda em centavos no objeto price). Convertemos p/ reais.
+  const pr = raw.price || {};
+  const reais = (c) => (c == null ? null : Number(c) / 100);
+  out.amounts = {
+    order_price: reais(pr.order_price),                       // valor dos itens
+    delivery_fee: reais(pr.store_charged_delivery_price),     // taxa de entrega cobrada da loja
+    service_fee: reais(pr.others_fees?.service_price),        // taxa de serviço
+    items_discount: reais(pr.items_discount),                 // desconto nos itens
+    delivery_discount: reais(pr.delivery_discount),           // desconto na entrega
+    refund: reais(pr.refund_price),                           // reembolso
+  };
+
+  // Endereço completo (útil pro card do KDS).
+  out.address = {
+    street: ra.street_name || null,
+    number: ra.street_number || ra.house_number || null,
+    district: ra.district || null,
+    city: ra.city || null,
+    state: ra.state || null,
+    complement: ra.complement || null,
+    reference: ra.reference || null,
+    full: ra.poi_address || ra.poi_display_name || null,
+    lat: ra.poi_lat || null,
+    lng: ra.poi_lng || null,
+  };
 
   return out;
 }
