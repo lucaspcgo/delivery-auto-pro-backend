@@ -167,7 +167,12 @@ router.post('/ifood/authorize/complete', async (req, res) => {
     const connected = [];
     for (const merchant of merchants) {
       const merchantId = merchant.id || merchant.merchantId;
-      const merchantName = merchant.name || merchant.corporateName || 'Loja iFood';
+      // Nome real: usa o da lista; se não vier, busca o detalhe da loja no iFood.
+      let merchantName = merchant.name || merchant.corporateName || null;
+      if (!merchantName) {
+        const detail = await ifoodAPI.getMerchantDetail(merchantId, token);
+        merchantName = (detail && (detail.name || detail.corporateName)) || 'Loja iFood';
+      }
 
       const existing = await pool.query(
         `SELECT r.id FROM restaurants r
@@ -258,6 +263,108 @@ router.get('/ifood/stores', async (req, res) => {
   } catch (err) {
     console.error('[ifood stores] erro:', err.message);
     return res.status(500).json({ error: 'Erro ao listar lojas iFood', details: err.message });
+  }
+});
+
+// Remove UMA loja iFood do usuário (pelo merchant). Apaga o vínculo e, se o
+// restaurante ficar sem nenhuma plataforma, apaga o restaurante também.
+router.delete('/ifood/stores/:merchantId', async (req, res) => {
+  const { merchantId } = req.params;
+  try {
+    const rp = await pool.query(
+      `SELECT rp.id, rp.restaurant_id FROM restaurant_platforms rp
+       WHERE rp.platform = 'ifood' AND rp.platform_merchant_id = $1 AND rp.user_id = $2`,
+      [String(merchantId), req.user.id]
+    );
+    if (rp.rows.length === 0) return res.status(404).json({ error: 'Loja iFood não encontrada' });
+
+    const restaurantId = rp.rows[0].restaurant_id;
+    await pool.query(`DELETE FROM restaurant_platforms WHERE id = $1`, [rp.rows[0].id]);
+
+    // Se o restaurante não tem mais nenhuma plataforma, remove o restaurante.
+    const outras = await pool.query(
+      `SELECT 1 FROM restaurant_platforms WHERE restaurant_id = $1 LIMIT 1`, [restaurantId]
+    );
+    if (outras.rows.length === 0) {
+      await pool.query(`DELETE FROM restaurants WHERE id = $1 AND user_id = $2`, [restaurantId, req.user.id]);
+    }
+
+    // Remove acessos iFood que ficaram sem nenhuma loja.
+    await ifoodDistributed.pruneOrphanAuths(req.user.id, -1);
+    console.log(`[ifood stores] loja ${merchantId} removida (user ${req.user.id})`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[ifood stores delete] erro:', err.message);
+    return res.status(500).json({ error: 'Erro ao remover loja iFood', details: err.message });
+  }
+});
+
+// Desconecta TUDO do iFood do usuário: apaga vínculos, restaurantes só-iFood e
+// os acessos (tokens). Útil pra limpar lojas de teste e começar do zero.
+router.post('/ifood/disconnect', async (req, res) => {
+  try {
+    // Restaurantes iFood do usuário
+    const rest = await pool.query(
+      `SELECT DISTINCT restaurant_id FROM restaurant_platforms WHERE platform='ifood' AND user_id=$1`,
+      [req.user.id]
+    );
+    // Apaga os vínculos iFood
+    await pool.query(`DELETE FROM restaurant_platforms WHERE platform='ifood' AND user_id=$1`, [req.user.id]);
+    // Apaga restaurantes que ficaram sem nenhuma plataforma
+    for (const r of rest.rows) {
+      const outras = await pool.query(`SELECT 1 FROM restaurant_platforms WHERE restaurant_id=$1 LIMIT 1`, [r.restaurant_id]);
+      if (outras.rows.length === 0) {
+        await pool.query(`DELETE FROM restaurants WHERE id=$1 AND user_id=$2`, [r.restaurant_id, req.user.id]);
+      }
+    }
+    // Apaga os acessos (tokens) iFood do usuário
+    await pool.query(`DELETE FROM ifood_auth WHERE user_id=$1`, [String(req.user.id)]);
+    console.log(`[ifood disconnect] user ${req.user.id} desconectou todo o iFood`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[ifood disconnect] erro:', err.message);
+    return res.status(500).json({ error: 'Erro ao desconectar iFood', details: err.message });
+  }
+});
+
+// Recarrega o NOME REAL das lojas iFood já cadastradas (corrige "Loja sem nome"
+// / "Loja iFood"). Percorre cada acesso, busca os merchants e atualiza o nome.
+router.post('/ifood/stores/resync-names', async (req, res) => {
+  try {
+    const auths = await pool.query(
+      `SELECT id FROM ifood_auth WHERE user_id=$1 AND refresh_token IS NOT NULL`,
+      [String(req.user.id)]
+    );
+    let atualizados = 0;
+    for (const a of auths.rows) {
+      let token;
+      try { token = await ifoodDistributed.getAccessTokenByAuthId(a.id); }
+      catch (e) { continue; }
+      let merchants = [];
+      try { merchants = await ifoodAPI.getMerchants(token); } catch (e) { continue; }
+      for (const m of merchants) {
+        const merchantId = m.id || m.merchantId;
+        let nome = m.name || m.corporateName || null;
+        if (!nome) {
+          const d = await ifoodAPI.getMerchantDetail(merchantId, token);
+          nome = d && (d.name || d.corporateName);
+        }
+        if (!nome) continue;
+        const upd = await pool.query(
+          `UPDATE restaurants r SET name=$1, updated_at=now()
+           FROM restaurant_platforms rp
+           WHERE rp.restaurant_id = r.id AND rp.platform='ifood'
+             AND rp.platform_merchant_id=$2 AND r.user_id=$3`,
+          [nome, String(merchantId), req.user.id]
+        );
+        atualizados += upd.rowCount || 0;
+      }
+    }
+    console.log(`[ifood resync-names] user ${req.user.id}: ${atualizados} nome(s) atualizado(s)`);
+    return res.json({ success: true, atualizados });
+  } catch (err) {
+    console.error('[ifood resync-names] erro:', err.message);
+    return res.status(500).json({ error: 'Erro ao atualizar nomes das lojas iFood', details: err.message });
   }
 });
 

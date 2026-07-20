@@ -81,6 +81,19 @@ class iFoodAPI {
     return Array.isArray(merchants) ? merchants : [];
   }
 
+  // Buscar detalhe de UM merchant (traz o nome real da loja). Retorna null se falhar.
+  async getMerchantDetail(merchantId, token) {
+    try {
+      const d = await this._request({
+        path: `/merchant/v1.0/merchants/${merchantId}`,
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      return d || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   // Listar catálogos de um merchant
   async getCatalogs(merchantId, token) {
     const catalogs = await this._request({
