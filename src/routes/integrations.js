@@ -283,8 +283,12 @@ router.post('/99food/connect-shop', async (req, res) => {
   if (!shopIdInput) {
     return res.status(400).json({ error: 'Shop ID é obrigatório' });
   }
-  // Usamos o mesmo id do 99Food como app_shop_id (mapeamento 1:1, único por loja)
-  const app_shop_id = String(shopIdInput);
+  // Trava: o Shop ID do 99food é numérico. Rejeita qualquer coisa com letras/
+  // símbolos antes de chamar a API (evita erro genérico lá na frente).
+  const app_shop_id = String(shopIdInput).trim();
+  if (!/^\d+$/.test(app_shop_id)) {
+    return res.status(400).json({ error: 'O Shop ID deve conter apenas números.' });
+  }
   try {
     // Se a loja ainda não estiver vinculada (bind), o token falha — então
     // fazemos o bind automaticamente e tentamos de novo.
