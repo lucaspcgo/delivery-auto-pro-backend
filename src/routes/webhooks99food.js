@@ -182,7 +182,7 @@ router.get('/orders', authenticateToken, async (req, res) => {
       query += ` AND LOWER(o.status) <> ALL($${params.length + 1}::text[])`;
       params.push(TERMINAL_RAW_STATUSES);
     }
-    query += ` ORDER BY o.created_at DESC LIMIT 100`;
+    query += ` ORDER BY o.created_at DESC LIMIT 400`;
     const result = await pool.query(query, params);
     const orders = await attachItemImages(result.rows, '99food', req.user.id);
     for (const o of orders) {
