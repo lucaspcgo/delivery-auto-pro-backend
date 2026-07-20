@@ -93,6 +93,7 @@ function hashes(base) {
 const first = SAMPLES[0];
 const rest = SAMPLES.slice(1);
 let found = 0;
+const winners = [];
 
 for (const cand of candidates(first)) {
   for (const h of hashes(cand.base)) {
@@ -106,6 +107,7 @@ for (const cand of candidates(first)) {
     });
     if (okAll) {
       found++;
+      winners.push({ id: cand.id, algo: h.algo });
       console.log('==> FÓRMULA ENCONTRADA:');
       console.log('    id   :', cand.id);
       console.log('    hash :', h.algo);
@@ -119,5 +121,21 @@ if (!found) {
   console.log('Nenhuma fórmula candidata reproduziu os dois signs.');
   console.log('Me avise — eu amplio o espaço de busca (outros params/encodings).');
 } else {
-  console.log(`Total de fórmulas que batem: ${found}. Use a de id acima para gerar o link.`);
+  console.log(`Total de fórmulas que batem: ${found}.`);
+  console.log('\n==> LINK FRESQUINHO gerado agora com a 1ª fórmula encontrada (teste no navegador):');
+  // Regenera um link com timestamp ATUAL: monta uma "amostra" com o time de
+  // agora, refaz os candidatos e pega o de mesmo id/algo da fórmula vencedora.
+  const winner = winners[0];
+  const now = String(Math.floor(Date.now() / 1000));
+  const p = SAMPLES[0];
+  const sampleNow = { app_id: p.app_id, enterprise_name: p.enterprise_name, uid: p.uid, time: now };
+  const cand = candidates(sampleNow).find(c => c.id === winner.id);
+  const sign = hashes(cand.base).find(x => x.algo === winner.algo).v;
+  const url = `https://merchant.99app.com/pt-BR/manager/app-authorize`
+    + `?app_id=${p.app_id}`
+    + `&enterprise_name=${encodeURIComponent(p.enterprise_name)}`
+    + `&sign=${sign}&time=${now}&uid=${p.uid}`;
+  console.log(url);
+  console.log('\nSe esse link abrir e MOSTRAR a loja pra autorizar, a fórmula está certa.');
+  console.log('Me mande a linha "id:" e "hash:" acima que eu implemento a geração automática no backend.');
 }
