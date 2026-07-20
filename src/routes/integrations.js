@@ -261,10 +261,19 @@ router.get('/ifood/stores', async (req, res) => {
   }
 });
 
-// Retorna a URL de autorização do app 99Food (para o botão "Autorizar")
-router.get('/99food/authorize-url', (req, res) => {
-  const url = process.env.FOOD99_AUTHORIZE_URL || null;
-  return res.json({ url });
+// Retorna a URL de autorização do app 99Food (para o botão "Autorizar").
+// Gera o link na HORA pela API oficial da 99food (getUrl) — link fresco,
+// válido por 7 dias, sem precisar copiar do painel. Se a API falhar, cai
+// para a variável de ambiente (compat).
+router.get('/99food/authorize-url', async (req, res) => {
+  try {
+    const url = await food99.getAuthorizationUrl();
+    return res.json({ url, source: 'api' });
+  } catch (err) {
+    console.warn('[99food authorize-url] API falhou, usando fallback do env:', err.message);
+    const url = process.env.FOOD99_AUTHORIZE_URL || null;
+    return res.json({ url, source: url ? 'env' : null });
+  }
 });
 
 // ===== Conectar loja 99Food pelo Shop ID =====

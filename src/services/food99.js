@@ -29,6 +29,20 @@ function postRaw99(path, rawBody) {
   });
 }
 
+// Gera o LINK DE AUTORIZAÇÃO (página de vínculo self-service) do 99Food.
+// POST /v1/auth/authorizationpage/getUrl -> data.url (válido por 7 dias).
+// O lojista abre esse link, loga na conta 99 dele e autoriza nosso app.
+// Assim não é preciso copiar link manualmente do painel — é sempre fresco.
+async function getAuthorizationUrl() {
+  const ts = Math.floor(Date.now() / 1000);
+  const sign = generateSign({ app_id: String(APP_ID), timestamp: String(ts) });
+  const rawBody = `{"app_id":${APP_ID},"timestamp":${ts},"sign":"${sign}"}`;
+  const result = await postRaw99('/v1/auth/authorizationpage/getUrl', rawBody);
+  if (result.errno !== 0) throw new Error(`[99food] Erro ao gerar link de autorização: ${JSON.stringify(result)}`);
+  if (!result.data || !result.data.url) throw new Error(`[99food] resposta sem url: ${JSON.stringify(result)}`);
+  return result.data.url;
+}
+
 // Vincula (bind) uma loja do 99Food ao app. shopId = ID no 99Food (int);
 // appShopId = ID no nosso sistema (usamos o mesmo, único por loja).
 async function bindStore(shopId, appShopId) {
@@ -167,4 +181,4 @@ function getStoreDetail(authToken) {
   });
 }
 
-module.exports = { refreshToken, getToken, getValidToken, getOrderDetail, confirmOrder, readyOrder, cancelOrder, payConfirm, bindStore, getStoreDetail };
+module.exports = { refreshToken, getToken, getValidToken, getOrderDetail, confirmOrder, readyOrder, cancelOrder, payConfirm, bindStore, getStoreDetail, getAuthorizationUrl };
