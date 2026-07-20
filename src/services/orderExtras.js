@@ -78,6 +78,19 @@ function horaISO(iso) {
   } catch { return null; }
 }
 
+// Canal de pagamento do 99Food (pay_channel) -> nome PT-BR (tabela oficial).
+const FOOD99_CHANNEL = {
+  110: 'Cupom', 150: 'Cartão de crédito/débito', 153: 'Dinheiro',
+  154: 'POS (maquininha)', 182: 'PayPay', 184: 'PayPay', 190: '99Pay',
+  120: 'Carteira 99Food', 2008: 'Marketing', 901: 'Benefício',
+  310: 'Yape', 311: 'Plin', 167: 'Pré-autorização', 219: '99Food Cuenta',
+  212: 'Pix', 280: 'Pix', 229: 'NuPay', 234: 'Apple Pay', 235: 'Apple Pay',
+  257: 'Vale-refeição Pluxee', 258: 'Vale-refeição Ticket', 259: 'Vale-refeição VR',
+  260: 'Vale-refeição Alelo', 261: 'NEQUI', 262: 'Cartão de crédito (POS)',
+  263: 'Cartão de débito (POS)', 264: 'Vale-refeição (POS)',
+  272: 'Google Pay', 273: 'Google Pay',
+};
+
 function fromFood99(raw) {
   const out = {
     payment_method: null, payment_when: null, order_type: null,
@@ -114,31 +127,44 @@ function fromFood99(raw) {
   const eta = raw.expected_arrived_eta || raw.delivery_eta;
   if (eta) { out.promise_time = hora(eta); out.promise_epoch = Number(eta) * 1000; }
 
-  // Tipo de entrega (99Food manda código numérico em delivery_type)
+  // Entrega x Retirada = fulfillment_mode (0-Entrega, 1-Retirada).
+  // (delivery_type é OUTRA coisa: quem entrega — 1=99Food, 2=a própria loja.)
+  if (raw.fulfillment_mode != null) {
+    out.order_type = Number(raw.fulfillment_mode) === 1 ? 'Retirada' : 'Entrega';
+  }
   if (raw.delivery_type != null) {
-    const dt = Number(raw.delivery_type);
-    out.order_type = dt === 2 ? 'Retirada' : 'Entrega'; // padrão: entrega
+    out.delivery_by = Number(raw.delivery_type) === 2 ? 'Entrega da loja' : 'Entrega 99Food';
   }
 
-  // Pagamento: pay_type 1 = pago online (pré-pago) / 2 = pagar na entrega.
-  // pay_method/pay_channel são o método específico (tabela de códigos do 99Food).
+  // Pagamento (tabela oficial do 99Food):
+  //  pay_method: 1=online / 2=offline (na entrega). pay_channel: método específico.
   const payCode = raw.pay_method ?? raw.pay_type;
   if (payCode != null) out.payment_code = Number(payCode);
-  if (raw.pay_channel != null) out.payment_channel = Number(raw.pay_channel);
-  if (raw.pay_type != null) {
-    out.payment_when = Number(raw.pay_type) === 2 ? 'Pagar na entrega' : 'Pago online';
+  if (raw.pay_channel != null) {
+    out.payment_channel = Number(raw.pay_channel);
+    out.payment_method = FOOD99_CHANNEL[Number(raw.pay_channel)] || null;
+  }
+  if (raw.pay_method != null) {
+    out.payment_when = Number(raw.pay_method) === 2 ? 'Pagar na entrega' : 'Pago online';
+  } else if (raw.pay_type != null) {
+    out.payment_when = Number(raw.pay_type) === 1 ? 'Pago online' : 'Pagar na entrega';
   }
 
-  // Valores (99Food manda em centavos no objeto price). Convertemos p/ reais.
+  // Valores (99Food manda em centavos no objeto price). Cobre os 3 modelos de
+  // preço (entrega 99Food x entrega da loja). Convertemos p/ reais.
   const pr = raw.price || {};
+  const of = pr.others_fees || {};
   const reais = (c) => (c == null ? null : Number(c) / 100);
   out.amounts = {
-    order_price: reais(pr.order_price),                       // valor dos itens
-    delivery_fee: reais(pr.store_charged_delivery_price),     // taxa de entrega cobrada da loja
-    service_fee: reais(pr.others_fees?.service_price),        // taxa de serviço
-    items_discount: reais(pr.items_discount),                 // desconto nos itens
-    delivery_discount: reais(pr.delivery_discount),           // desconto na entrega
-    refund: reais(pr.refund_price),                           // reembolso
+    order_price: reais(pr.order_price),                                   // valor dos itens
+    delivery_fee: reais(pr.delivery_price ?? pr.store_charged_delivery_price), // taxa de entrega
+    service_fee: reais(pr.service_price ?? of.service_price),             // taxa de serviço
+    items_discount: reais(pr.items_discount),                            // desconto nos itens
+    delivery_discount: reais(pr.delivery_discount),                      // desconto na entrega
+    customer_paid: reais(pr.real_pay_price ?? pr.customer_need_paying_money), // total pago pelo cliente
+    store_receives: reais(pr.real_price),                                // total que a loja recebe
+    tip: reais(of.total_tip_money),                                      // gorjeta
+    refund: reais(pr.refund_price),                                      // reembolso
   };
 
   // Endereço completo (útil pro card do KDS).
