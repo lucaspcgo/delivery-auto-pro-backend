@@ -102,6 +102,12 @@ router.post('/', async (req, res) => {
         console.log('[99food diag] chaves numero-pedido:', numKeys.map(k => `${k}=${order[k]}`).join(', ') || 'NENHUMA');
         console.log('[99food diag] chaves do item[0]:', Object.keys(item0).join(', '));
         console.log('[99food diag] chaves foto no item:', imgKeys.map(k => `${k}=${item0[k]}`).join(', ') || 'NENHUMA');
+        // Pagamento + distância: mostra os campos e valores pra mapear no KDS.
+        const payKeys = Object.keys(order).filter(k => /pay|payment|price|amount|online|prepaid/i.test(k));
+        const distKeys = Object.keys(order).filter(k => /dist|km|meter|range/i.test(k));
+        console.log('[99food diag] pagamento:', payKeys.map(k => `${k}=${JSON.stringify(order[k])}`).join(', ') || 'NENHUMA');
+        console.log('[99food diag] distancia:', distKeys.map(k => `${k}=${JSON.stringify(order[k])}`).join(', ') || 'NENHUMA');
+        console.log('[99food diag] endereco keys:', Object.keys(order.receive_address || {}).join(', ') || 'NENHUMA');
       }
     } catch (e) { console.warn('[99food diag] falhou:', e.message); }
 
