@@ -93,8 +93,17 @@ async function tryAutoAccept(platform, orderId, storeId, userId) {
 
     const rule = rules.rows[0];
     // Espera accept_delay_seconds antes de ACEITAR; depois delay_seconds antes de marcar PRONTO.
-    const acceptDelay = (rule.accept_delay_seconds != null ? rule.accept_delay_seconds : 0) * 1000; // padrão: na hora
+    let acceptDelay = (rule.accept_delay_seconds != null ? rule.accept_delay_seconds : 0) * 1000; // padrão: na hora
     const readyDelay = (rule.delay_seconds != null ? rule.delay_seconds : 480) * 1000; // padrão 8 min
+
+    // TEMPO MÍNIMO antes de aceitar pedidos do 99Food: dá tempo do gestor da 99
+    // imprimir o pedido (que chega como NOVO) antes da gente aceitar via API.
+    // Controlado por env AUTO_ACCEPT_MIN_DELAY_SECONDS (padrão 0 = não muda nada).
+    const minAcceptSec = Number(process.env.AUTO_ACCEPT_MIN_DELAY_SECONDS || 0);
+    if (platform === '99food' && minAcceptSec > 0 && acceptDelay < minAcceptSec * 1000) {
+      acceptDelay = minAcceptSec * 1000;
+      console.log(`[auto-accept] mínimo de ${minAcceptSec}s antes de aceitar (99food, p/ impressão do gestor)`);
+    }
 
     console.log(`[auto-accept] pedido ${orderId} (${platform}, user ${userId}) aceita em ${Math.round(acceptDelay / 1000)}s; pronto ${Math.round(readyDelay / 1000)}s após aceitar`);
 
