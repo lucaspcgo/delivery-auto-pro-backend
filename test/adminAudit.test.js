@@ -26,10 +26,12 @@ test('retorna resumo e lista com data de criação e lojas conectadas', async ()
   pool.query.mockResolvedValueOnce({ rows: [
     { id: 'a', name: 'Loja A', email: 'a@x.com', plan: 'pro', active: true, is_admin: false,
       payment_status: 'active', created_at: '2026-07-01T00:00:00Z',
-      stores_connected: '3', ifood_stores: '2', food99_stores: '1' },
+      stores_connected: '3', ifood_stores: '2', food99_stores: '1',
+      last_order_at: '2026-07-20T10:00:00Z', orders_total: '42' },
     { id: 'b', name: 'Loja B', email: 'b@x.com', plan: 'starter', active: false, is_admin: false,
       payment_status: 'suspended', created_at: '2026-06-15T00:00:00Z',
-      stores_connected: '0', ifood_stores: '0', food99_stores: '0' },
+      stores_connected: '0', ifood_stores: '0', food99_stores: '0',
+      last_order_at: null, orders_total: '0' },
   ] });
 
   const res = await request(app())
@@ -42,6 +44,8 @@ test('retorna resumo e lista com data de criação e lojas conectadas', async ()
   });
   expect(res.body.users[0].created_at).toBe('2026-07-01T00:00:00Z');
   expect(res.body.users[0].stores_connected).toBe(3); // número, não string
+  expect(res.body.users[0].last_order_at).toBe('2026-07-20T10:00:00Z');
+  expect(res.body.users[0].orders_total).toBe(42);
 });
 
 test('sem token de admin -> 401/403', async () => {

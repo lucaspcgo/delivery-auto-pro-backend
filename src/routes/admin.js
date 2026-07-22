@@ -245,7 +245,9 @@ router.get('/audit', async (req, res) => {
               u.payment_status, u.created_at,
               COALESCE(s.stores, 0)  AS stores_connected,
               COALESCE(s.ifood, 0)   AS ifood_stores,
-              COALESCE(s.food99, 0)  AS food99_stores
+              COALESCE(s.food99, 0)  AS food99_stores,
+              o.last_order_at,
+              COALESCE(o.orders_total, 0) AS orders_total
        FROM users u
        LEFT JOIN (
          SELECT user_id,
@@ -255,6 +257,10 @@ router.get('/audit', async (req, res) => {
          FROM restaurant_platforms
          GROUP BY user_id
        ) s ON s.user_id = u.id
+       LEFT JOIN (
+         SELECT user_id, MAX(created_at) AS last_order_at, COUNT(*) AS orders_total
+         FROM orders GROUP BY user_id
+       ) o ON o.user_id = u.id
        ORDER BY u.created_at DESC`
     );
 
@@ -274,6 +280,7 @@ router.get('/audit', async (req, res) => {
         stores_connected: Number(u.stores_connected),
         ifood_stores: Number(u.ifood_stores),
         food99_stores: Number(u.food99_stores),
+        orders_total: Number(u.orders_total),
       })),
     });
   } catch (err) { return res.status(500).json({ error: err.message }); }
