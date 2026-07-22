@@ -65,9 +65,23 @@ function makeDebugHandler(platform) {
       const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
       const offset = Math.max(Number(req.query.offset) || 0, 0);
 
+      // Escopo: usuário comum só enxerga a própria conta. O ADMIN pode auditar
+      // qualquer conta (?user_id=...) e/ou uma loja específica (?store=<app_shop_id
+      // ou merchant>) — útil pra conferir se a automação marcou PRONTO via API.
+      const filters = ['platform = $1'];
+      const params = [platform];
+      let idx = 2;
+
+      const targetUser = req.user.is_admin ? (req.query.user_id || null) : req.user.id;
+      if (targetUser) { filters.push(`user_id = $${idx++}`); params.push(targetUser); }
+
+      if (req.query.store) { filters.push(`app_shop_id = $${idx++}`); params.push(String(req.query.store)); }
+
+      const where = filters.join(' AND ');
+
       const totalRes = await pool.query(
-        'SELECT COUNT(*)::int AS total FROM orders WHERE platform = $1 AND user_id = $2',
-        [platform, req.user.id]
+        `SELECT COUNT(*)::int AS total FROM orders WHERE ${where}`,
+        params
       );
       const total = totalRes.rows[0].total;
 
@@ -76,13 +90,13 @@ function makeDebugHandler(platform) {
                 customer_phone, delivery_address, items, total_price, raw_payload,
                 created_at, updated_at
            FROM orders
-          WHERE platform = $1 AND user_id = $2
+          WHERE ${where}
           ORDER BY created_at DESC
-          LIMIT $3 OFFSET $4`,
-        [platform, req.user.id, limit, offset]
+          LIMIT $${idx++} OFFSET $${idx++}`,
+        [...params, limit, offset]
       );
 
-      const withImages = await attachItemImages(result.rows, platform, req.user.id);
+      const withImages = await attachItemImages(result.rows, platform, targetUser || req.user.id);
 
       const out = withImages.map((o) => {
         let raw = o.raw_payload;
@@ -99,9 +113,11 @@ function makeDebugHandler(platform) {
         return {
           id: o.id,
           platform_order_id: o.platform_order_id,
+          app_shop_id: o.app_shop_id, // loja (merchant/shop) — pra auditoria
           status: o.status,
           kds_stage: normalizeStage(o.status),
           created_at: o.created_at,
+          updated_at: o.updated_at, // quando o status mudou pela última vez (ex.: PRONTO)
           mapped,
           field_checks: buildFieldChecks(mapped, raw, platform),
           raw_keys: raw && typeof raw === 'object' ? Object.keys(raw) : [],
