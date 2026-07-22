@@ -320,8 +320,26 @@ async function dispatchOrder(merchantId, orderId) {
 
 async function cancelOrder(merchantId, orderId, reason) {
   const token = await getAccessTokenByMerchant(merchantId);
+  // O iFood NÃO aceita um código fixo: cada pedido tem sua própria lista de
+  // motivos válidos (dependem do momento/estado do pedido). Buscamos os motivos
+  // permitidos e usamos um deles; senão o cancelamento é rejeitado (foi o que
+  // reprovou na homologação). Se por acaso não vier lista, tenta o 501 (padrão).
+  let cancellationCode = '501';
+  let cancelReason = reason || 'PROBLEMAS_SISTEMA';
+  try {
+    const reasons = await orderRequest(token, 'GET',
+      `/order/v1.0/orders/${orderId}/cancellationReasons`, null);
+    if (Array.isArray(reasons) && reasons.length > 0) {
+      // Prefere um motivo do lado do restaurante; senão, o primeiro válido.
+      const chosen = reasons.find(r => String(r.cancelCodeId) === '501') || reasons[0];
+      cancellationCode = String(chosen.cancelCodeId);
+      cancelReason = chosen.description || cancelReason;
+    }
+  } catch (e) {
+    console.warn(`[ifood cancel] não consegui buscar motivos válidos do pedido ${orderId} (usando ${cancellationCode}): ${e.message}`);
+  }
   return orderRequest(token, 'POST', `/order/v1.0/orders/${orderId}/requestCancellation`,
-    { reason: reason || 'INTERNAL_DIFFICULTIES', cancellationCode: '501' });
+    { reason: cancelReason, cancellationCode });
 }
 
 // Indica se o usuário já tem ao menos uma autorização válida
