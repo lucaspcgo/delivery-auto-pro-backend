@@ -2,6 +2,7 @@ const pool = require('../db/postgres');
 const { attachItemImages } = require('../services/orderImages');
 const { extractOrderExtras } = require('../services/orderExtras');
 const { normalizeStage } = require('../services/kdsStages');
+const { ensureAutomationSchema } = require('../services/autoAccept');
 
 // ─── Helpers de comparação ──────────────────────────────────────────────────
 const isEmpty = (v) => v == null || (typeof v === 'string' && v.trim() === '');
@@ -62,6 +63,9 @@ function buildFieldChecks(mapped, raw, platform) {
 function makeDebugHandler(platform) {
   return async (req, res) => {
     try {
+      // Garante que as colunas de carimbo da automação existam (idempotente).
+      await ensureAutomationSchema();
+
       const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
       const offset = Math.max(Number(req.query.offset) || 0, 0);
 
@@ -88,7 +92,8 @@ function makeDebugHandler(platform) {
       const result = await pool.query(
         `SELECT id, platform, platform_order_id, app_shop_id, status, customer_name,
                 customer_phone, delivery_address, items, total_price, raw_payload,
-                created_at, updated_at
+                created_at, updated_at,
+                automation_accepted_at, automation_ready_at, automation_dispatched_at
            FROM orders
           WHERE ${where}
           ORDER BY created_at DESC
@@ -118,6 +123,12 @@ function makeDebugHandler(platform) {
           kds_stage: normalizeStage(o.status),
           created_at: o.created_at,
           updated_at: o.updated_at, // quando o status mudou pela última vez (ex.: PRONTO)
+          // Carimbos da NOSSA automação (via API). Se preenchidos, PROVA que a
+          // automação executou a ação — e a que horas. Vazio = foi manual/gestor.
+          automation_accepted_at: o.automation_accepted_at,
+          automation_ready_at: o.automation_ready_at,
+          automation_dispatched_at: o.automation_dispatched_at,
+          automation_did_it: !!(o.automation_accepted_at || o.automation_ready_at || o.automation_dispatched_at),
           mapped,
           field_checks: buildFieldChecks(mapped, raw, platform),
           raw_keys: raw && typeof raw === 'object' ? Object.keys(raw) : [],

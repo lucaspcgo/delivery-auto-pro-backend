@@ -35,11 +35,32 @@ function ensureAutomationSchema() {
     schemaReady = Promise.allSettled([
       pool.query(`ALTER TABLE automation_rules ADD COLUMN IF NOT EXISTS accept_delay_seconds INTEGER DEFAULT 0`),
       pool.query(`ALTER TABLE restaurant_platforms ADD COLUMN IF NOT EXISTS automation_enabled BOOLEAN DEFAULT true`),
+      // Carimbos de AUDITORIA: gravados só quando a NOSSA automação executa a
+      // ação via API (ação manual no gestor não carimba). Prova pro cliente de
+      // que a automação aceitou/marcou pronto/despachou, e a que horas.
+      pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS automation_accepted_at TIMESTAMPTZ`),
+      pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS automation_ready_at TIMESTAMPTZ`),
+      pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS automation_dispatched_at TIMESTAMPTZ`),
     ]).then(results => {
       results.forEach(r => { if (r.status === 'rejected') console.warn('[auto-accept] schema:', r.reason?.message); });
     });
   }
   return schemaReady;
+}
+
+// Carimba no pedido o momento em que a automação executou a ação (via API).
+// `column` é um nome fixo interno (não vem do usuário) — seguro interpolar.
+// Só grava se ainda estiver vazio (mantém o PRIMEIRO carimbo, o real).
+async function stampAutomation(platform, orderId, userId, column) {
+  try {
+    await pool.query(
+      `UPDATE orders SET ${column}=now()
+        WHERE platform=$1 AND platform_order_id=$2 AND user_id=$3 AND ${column} IS NULL`,
+      [platform, String(orderId), userId]
+    );
+  } catch (e) {
+    console.warn(`[auto] não consegui carimbar ${column} do pedido ${orderId}: ${e.message}`);
+  }
 }
 
 // Diz se a automação está LIGADA para uma loja específica. À PROVA DE FALHA:
@@ -118,6 +139,7 @@ async function tryAutoAccept(platform, orderId, storeId, userId) {
         }
 
         await advanceIfForward(platform, orderId, userId, 'confirmed');
+        await stampAutomation(platform, orderId, userId, 'automation_accepted_at');
 
         console.log(`[auto-accept] pedido ${orderId} (${platform}, user ${userId}) ACEITO automaticamente`);
 
@@ -125,15 +147,18 @@ async function tryAutoAccept(platform, orderId, storeId, userId) {
         setTimeout(async () => {
           try {
             if (platform === 'ifood') {
-              await ifoodDistributed.readyToPickup(storeId, orderId).catch(e =>
-                console.warn(`[auto-ready] readyToPickup ${orderId}: ${e.message}`));
-              await ifoodDistributed.dispatchOrder(storeId, orderId).catch(e =>
-                console.warn(`[auto-ready] dispatch ${orderId}: ${e.message}`));
+              await ifoodDistributed.readyToPickup(storeId, orderId)
+                .then(() => stampAutomation(platform, orderId, userId, 'automation_ready_at'))
+                .catch(e => console.warn(`[auto-ready] readyToPickup ${orderId}: ${e.message}`));
+              await ifoodDistributed.dispatchOrder(storeId, orderId)
+                .then(() => stampAutomation(platform, orderId, userId, 'automation_dispatched_at'))
+                .catch(e => console.warn(`[auto-ready] dispatch ${orderId}: ${e.message}`));
               console.log(`[auto-ready] pedido ${orderId} (ifood) marcado como PRONTO e DESPACHADO`);
             } else if (platform === '99food') {
               const authToken = await food99.getValidToken(storeId);
-              await food99.readyOrder(authToken, orderId).catch(e =>
-                console.warn(`[auto-ready] ready 99food ${orderId}: ${e.message}`));
+              await food99.readyOrder(authToken, orderId)
+                .then(() => stampAutomation(platform, orderId, userId, 'automation_ready_at'))
+                .catch(e => console.warn(`[auto-ready] ready 99food ${orderId}: ${e.message}`));
               console.log(`[auto-ready] pedido ${orderId} (99food) marcado como PRONTO`);
             }
 
