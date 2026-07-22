@@ -2,6 +2,8 @@ const pool = require('../db/postgres');
 const food99 = require('./food99');
 const ifoodDistributed = require('./ifood-distributed');
 const { stageRank } = require('./kdsStages');
+const { isPlanGatingEnabled } = require('../config/featureFlags');
+const { checkUserAccess } = require('./accessControl');
 
 // Atualiza o status SÓ se for AVANÇO (nunca regride). Evita que o timer da
 // automação (aceite/pronto) puxe de volta um pedido que já foi pra entrega ou
@@ -88,6 +90,20 @@ async function tryAutoAccept(platform, orderId, storeId, userId) {
     if (!userId) {
       console.log(`[auto-accept] sem userId para pedido ${orderId} (${platform}) — ignorando`);
       return false;
+    }
+
+    // Conta bloqueada (inativa / pagamento suspenso / plano vencido) NÃO tem
+    // automação. Respeita o ciclo do plano. Só corta com a flag ligada.
+    if (isPlanGatingEnabled()) {
+      try {
+        const { blocked, reason } = await checkUserAccess(userId);
+        if (blocked) {
+          console.log(`[auto-accept] conta do user ${userId} bloqueada (${reason}) — automação NÃO roda p/ pedido ${orderId}`);
+          return false;
+        }
+      } catch (e) {
+        console.warn(`[auto-accept] checagem de acesso do user ${userId} falhou (deixando rodar): ${e.message}`);
+      }
     }
 
     await ensureAutomationSchema();

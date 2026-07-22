@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const pool = require('../db/postgres');
 const router = express.Router();
 const { JWT_SECRET } = require('../config/env');
+const { isPlanGatingEnabled } = require('../config/featureFlags');
 
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
@@ -34,6 +35,18 @@ router.post('/login', async (req, res) => {
     if (user.payment_status === 'suspended') {
       return res.status(403).json({
         error: 'Acesso suspenso. Regularize seu pagamento.',
+        payment_suspended: true,
+        redirect: '/checkout'
+      });
+    }
+
+    // Plano PAGO vencido (fim do ciclo mensal/semanal/anual): bloqueia e
+    // suspende. Só com a flag ligada (admin nunca cai aqui).
+    if (isPlanGatingEnabled() && !user.is_admin && user.plan_expires_at
+        && new Date(user.plan_expires_at) < new Date()) {
+      await pool.query(`UPDATE users SET payment_status='suspended', updated_at=now() WHERE id=$1`, [user.id]);
+      return res.status(403).json({
+        error: 'Seu plano venceu. Renove para continuar.',
         payment_suspended: true,
         redirect: '/checkout'
       });

@@ -3,6 +3,7 @@ const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const pool = require('../db/postgres');
+const { billingIntervalDays } = require('../services/billing');
 const router = express.Router();
 
 const { JWT_SECRET } = require('../config/env');
@@ -176,13 +177,16 @@ router.put('/invoices/:id', async (req, res) => {
     // Se pago, ativar acesso do usuário
     if (status === 'paid') {
       const invoice = result.rows[0];
+      // Validade conforme o CICLO do plano (semanal=7, mensal=30, anual=365).
+      const planRow = await pool.query('SELECT billing_period FROM plans WHERE slug=$1', [invoice.plan]);
+      const days = billingIntervalDays(planRow.rows[0] ? planRow.rows[0].billing_period : null);
       await pool.query(
         `UPDATE users SET payment_status='active', plan=$1,
-         plan_expires_at=(now() + INTERVAL '30 days'), updated_at=now()
-         WHERE id=$2`,
-        [invoice.plan, invoice.user_id]
+         plan_expires_at=(now() + ($2 || ' days')::interval), active=true, updated_at=now()
+         WHERE id=$3`,
+        [invoice.plan, String(days), invoice.user_id]
       );
-      console.log(`[admin] fatura ${req.params.id} paga — acesso liberado`);
+      console.log(`[admin] fatura ${req.params.id} paga — acesso liberado por ${days} dias (${invoice.plan})`);
     } else if (status === 'failed' || status === 'cancelled') {
       const invoice = result.rows[0];
       await pool.query(`UPDATE users SET payment_status='suspended', updated_at=now() WHERE id=$1`, [invoice.user_id]);
