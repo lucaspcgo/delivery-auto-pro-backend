@@ -6,6 +6,7 @@ const router = express.Router();
 
 const { JWT_SECRET } = require('../config/env');
 const { billingIntervalDays } = require('../services/billing');
+const { trialDays } = require('../config/featureFlags');
 
 function optionalAuth(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -56,8 +57,8 @@ router.post('/create', optionalAuth, async (req, res) => {
       if (selectedPlan.is_free) {
         const newUser = await pool.query(
           `INSERT INTO users (name, email, password_hash, plan, payment_status, plan_expires_at)
-           VALUES ($1, $2, $3, $4, 'active', now() + INTERVAL '7 days') RETURNING *`,
-          [name, email, hash, plan]
+           VALUES ($1, $2, $3, $4, 'active', now() + ($5 || ' days')::interval) RETURNING *`,
+          [name, email, hash, plan, String(trialDays())]
         );
         const u = newUser.rows[0];
 
@@ -69,10 +70,10 @@ router.post('/create', optionalAuth, async (req, res) => {
           { id: u.id, email: u.email, name: u.name, role: u.role, is_admin: u.is_admin, plan: u.plan },
           JWT_SECRET, { expiresIn: '24h' }
         );
-        console.log(`[checkout] trial gratuito criado: ${email} (expira em 7 dias)`);
+        console.log(`[checkout] trial gratuito criado: ${email} (expira em ${trialDays()} dias)`);
         return res.json({
           type: 'free_trial', success: true,
-          message: 'Conta gratuita criada! Você tem 7 dias para testar.',
+          message: `Conta gratuita criada! Você tem ${trialDays()} dias para testar.`,
           expires_at: u.plan_expires_at, token,
           user: { id: u.id, name: u.name, email: u.email, role: u.role, plan: u.plan, is_admin: u.is_admin, payment_status: 'active' }
         });

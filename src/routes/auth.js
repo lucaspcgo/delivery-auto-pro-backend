@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 const pool = require('../db/postgres');
 const router = express.Router();
 const { JWT_SECRET } = require('../config/env');
-const { isPlanGatingEnabled } = require('../config/featureFlags');
+const { isPlanGatingEnabled, trialDays } = require('../config/featureFlags');
 
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
@@ -26,7 +26,7 @@ router.post('/login', async (req, res) => {
       await pool.query(`UPDATE integrations SET status='disconnected', api_status='offline', updated_at=now() WHERE user_id=$1`, [user.id]);
       await pool.query(`UPDATE users SET payment_status='suspended', updated_at=now() WHERE id=$1`, [user.id]);
       return res.status(403).json({
-        error: 'Seu período gratuito de 7 dias expirou. Assine um plano para continuar.',
+        error: `Seu período gratuito de ${trialDays()} dias expirou. Assine um plano para continuar.`,
         trial_expired: true,
         redirect: '/checkout'
       });
@@ -80,7 +80,7 @@ router.post('/register', async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const trialExpiresAt = new Date();
-    trialExpiresAt.setDate(trialExpiresAt.getDate() + 7);
+    trialExpiresAt.setDate(trialExpiresAt.getDate() + trialDays());
 
     const result = await pool.query(
       `INSERT INTO users (name, email, password_hash, phone, role, plan, active, payment_status, plan_expires_at)
