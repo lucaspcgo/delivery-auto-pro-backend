@@ -4,6 +4,7 @@ const pool = require('../db/postgres');
 const router = express.Router();
 
 const { JWT_SECRET } = require('../config/env');
+const { normalizeBillingPeriod } = require('../services/billing');
 
 // GET /api/v1/plans — lista planos ativos (público)
 router.get('/', async (req, res) => {
@@ -44,7 +45,7 @@ router.post('/', adminAuth, async (req, res) => {
     const result = await pool.query(
       `INSERT INTO plans (slug, name, price, billing_period, popular, is_free, capabilities, max_restaurants, max_orders_month, features, sort_order)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [slug, name, price || 0, billing_period || 'monthly', popular || false, is_free || false,
+      [slug, name, price || 0, normalizeBillingPeriod(billing_period), popular || false, is_free || false,
        JSON.stringify(capabilities || {}), max_restaurants || 1, max_orders_month || 0,
        JSON.stringify(features || []), sort_order || 0]
     );
@@ -69,7 +70,7 @@ router.put('/:id', adminAuth, async (req, res) => {
        max_restaurants=COALESCE($8,max_restaurants), max_orders_month=COALESCE($9,max_orders_month),
        features=COALESCE($10,features), sort_order=COALESCE($11,sort_order), updated_at=now()
        WHERE id=$12 RETURNING *`,
-      [name, price, billing_period, popular, is_free, active,
+      [name, price, billing_period != null ? normalizeBillingPeriod(billing_period) : null, popular, is_free, active,
        capabilities ? JSON.stringify(capabilities) : null,
        max_restaurants, max_orders_month,
        features ? JSON.stringify(features) : null, sort_order, req.params.id]

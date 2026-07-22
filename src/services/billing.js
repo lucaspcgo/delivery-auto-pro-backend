@@ -9,4 +9,18 @@ function billingIntervalDays(period) {
   return 30; // monthly / mensal / único / gratuito (default)
 }
 
-module.exports = { billingIntervalDays };
+// Normaliza o período pra um dos valores canônicos aceitos pela trava do banco
+// (weekly/monthly/yearly/one_time/free). Aceita rótulos PT e inglês.
+function normalizeBillingPeriod(v) {
+  const p = String(v || '').trim().toLowerCase();
+  if (p === 'weekly' || p === 'semanal') return 'weekly';
+  if (p === 'yearly' || p === 'annual' || p === 'anual') return 'yearly';
+  if (p === 'one_time' || p === 'onetime' || p === 'único' || p === 'unico' || p === 'single') return 'one_time';
+  if (p === 'free' || p === 'gratuito' || p === 'gratis' || p === 'grátis') return 'free';
+  return 'monthly'; // mensal / monthly / vazio → padrão
+}
+
+// Conjunto canônico (usado também pela trava CHECK do banco).
+const BILLING_PERIODS = ['weekly', 'monthly', 'yearly', 'one_time', 'free'];
+
+module.exports = { billingIntervalDays, normalizeBillingPeriod, BILLING_PERIODS };
