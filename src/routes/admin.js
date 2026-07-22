@@ -107,6 +107,33 @@ router.post('/users/:id/reset-password', async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
+// POST /api/v1/admin/users/:id/renew — renova o acesso do usuário por +1 ciclo
+// do plano dele (semanal=7, mensal=30, anual=365 dias), reativa a conta e tira
+// a suspensão. Estende a partir da validade atual se ainda estiver no futuro
+// (não perde os dias que faltavam); senão, conta a partir de agora.
+router.post('/users/:id/renew', async (req, res) => {
+  try {
+    const u = await pool.query('SELECT id, plan, plan_expires_at FROM users WHERE id=$1', [req.params.id]);
+    if (u.rows.length === 0) return res.status(404).json({ error: 'Usuário não encontrado' });
+
+    const planRow = await pool.query('SELECT billing_period FROM plans WHERE slug=$1', [u.rows[0].plan]);
+    const days = billingIntervalDays(planRow.rows[0] ? planRow.rows[0].billing_period : null);
+
+    // Base = maior entre agora e a validade atual (renovação antecipada soma).
+    const result = await pool.query(
+      `UPDATE users SET
+         payment_status='active', active=true,
+         plan_expires_at = GREATEST(COALESCE(plan_expires_at, now()), now()) + ($1 || ' days')::interval,
+         updated_at=now()
+       WHERE id=$2
+       RETURNING id, email, plan, payment_status, plan_expires_at`,
+      [String(days), req.params.id]
+    );
+    console.log(`[admin] acesso do usuário ${req.params.id} renovado por ${days} dias`);
+    return res.json({ success: true, days, ...result.rows[0] });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
 // POST /api/v1/admin/users — criar novo usuário
 router.post('/users', async (req, res) => {
   const { name, email, password, plan, role } = req.body;
