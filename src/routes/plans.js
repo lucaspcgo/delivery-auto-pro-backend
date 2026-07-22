@@ -52,7 +52,8 @@ router.post('/', adminAuth, async (req, res) => {
     return res.status(201).json(result.rows[0]);
   } catch (err) {
     if (err.code === '23505') return res.status(400).json({ error: 'Slug já existe' });
-    return res.status(500).json({ error: err.message });
+    console.error(`[plans] FALHA ao criar plano ${slug}: ${err.message} (code: ${err.code})`);
+    return res.status(500).json({ error: err.message, code: err.code });
   }
 });
 
@@ -76,7 +77,10 @@ router.put('/:id', adminAuth, async (req, res) => {
     if (result.rowCount === 0) return res.status(404).json({ error: 'Plano não encontrado' });
     console.log(`[plans] plano atualizado: ${result.rows[0].name}`);
     return res.json(result.rows[0]);
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error(`[plans] FALHA ao atualizar plano ${req.params.id}: ${err.message} (code: ${err.code})`);
+    return res.status(500).json({ error: err.message, code: err.code });
+  }
 });
 
 // DELETE /api/v1/plans/:id — desativar plano (admin)
