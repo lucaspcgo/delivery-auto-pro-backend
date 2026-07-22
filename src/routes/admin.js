@@ -56,18 +56,19 @@ router.get('/users/:id', async (req, res) => {
 
 // PUT /api/v1/admin/users/:id — atualizar usuário (plano, status, etc)
 router.put('/users/:id', async (req, res) => {
-  const { name, email, plan, active, payment_status, role, is_admin, plan_expires_at } = req.body;
+  const { name, email, phone, plan, active, payment_status, role, is_admin, plan_expires_at } = req.body;
   try {
     if (plan) {
       const ok = await pool.query('SELECT 1 FROM plans WHERE slug = $1 AND active = true', [plan]);
       if (ok.rows.length === 0) return res.status(400).json({ error: 'Plano inválido' });
     }
     const result = await pool.query(
-      `UPDATE users SET name=COALESCE($1,name), email=COALESCE($2,email), plan=COALESCE($3,plan),
-       active=COALESCE($4,active), payment_status=COALESCE($5,payment_status), role=COALESCE($6,role),
-       is_admin=COALESCE($7,is_admin), plan_expires_at=COALESCE($8,plan_expires_at), updated_at=now()
-       WHERE id=$9 RETURNING id, name, email, plan, active, payment_status, role, is_admin`,
-      [name, email, plan, active, payment_status, role, is_admin, plan_expires_at, req.params.id]
+      `UPDATE users SET name=COALESCE($1,name), email=COALESCE($2,email), phone=COALESCE($3,phone),
+       plan=COALESCE($4,plan), active=COALESCE($5,active), payment_status=COALESCE($6,payment_status),
+       role=COALESCE($7,role), is_admin=COALESCE($8,is_admin), plan_expires_at=COALESCE($9,plan_expires_at),
+       updated_at=now()
+       WHERE id=$10 RETURNING id, name, email, phone, plan, active, payment_status, role, is_admin`,
+      [name, email, phone, plan, active, payment_status, role, is_admin, plan_expires_at, req.params.id]
     );
     if (result.rowCount === 0) return res.status(404).json({ error: 'Usuário não encontrado' });
     console.log(`[admin] usuário ${req.params.id} atualizado`);

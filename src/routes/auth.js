@@ -55,7 +55,7 @@ router.post('/login', async (req, res) => {
 });
 
 router.post('/register', async (req, res) => {
-  const { name, email, password } = req.body;
+  const { name, email, password, phone } = req.body;
   if (!name || !email || !password) {
     return res.status(400).json({ error: 'Nome, email e senha são obrigatórios' });
   }
@@ -70,10 +70,10 @@ router.post('/register', async (req, res) => {
     trialExpiresAt.setDate(trialExpiresAt.getDate() + 7);
 
     const result = await pool.query(
-      `INSERT INTO users (name, email, password_hash, role, plan, active, payment_status, plan_expires_at)
-       VALUES ($1, $2, $3, $4, $5, true, $6, $7)
-       RETURNING id, name, email, plan, plan_expires_at`,
-      [name, email, hashedPassword, 'user', 'free', 'active', trialExpiresAt]
+      `INSERT INTO users (name, email, password_hash, phone, role, plan, active, payment_status, plan_expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8)
+       RETURNING id, name, email, phone, plan, plan_expires_at`,
+      [name, email, hashedPassword, phone || null, 'user', 'free', 'active', trialExpiresAt]
     );
 
     const newUser = result.rows[0];
@@ -87,7 +87,7 @@ router.post('/register', async (req, res) => {
     console.log(`[auth] registro: ${email}`);
     return res.status(201).json({
       token,
-      user: { id: newUser.id, name: newUser.name, email: newUser.email, plan: 'free', plan_expires_at: trialExpiresAt }
+      user: { id: newUser.id, name: newUser.name, email: newUser.email, phone: newUser.phone, plan: 'free', plan_expires_at: trialExpiresAt }
     });
   } catch (err) {
     console.error('[auth] erro no registro:', err.message);
