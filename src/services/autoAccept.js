@@ -65,6 +65,39 @@ async function stampAutomation(platform, orderId, userId, column) {
   }
 }
 
+// Lê do payload salvo se o pedido iFood é AGENDADO e a que horas começa a
+// janela de entrega. Retorna o timestamp (ms) do início da janela, ou null se
+// for imediato / sem agendamento. Pedido agendado NÃO pode ser despachado antes
+// dessa janela (regra da homologação iFood).
+async function getIfoodScheduleStart(orderId, userId) {
+  try {
+    const r = await pool.query(
+      `SELECT raw_payload FROM orders WHERE platform='ifood' AND platform_order_id=$1 AND user_id=$2`,
+      [String(orderId), userId]
+    );
+    let raw = r.rows[0] && r.rows[0].raw_payload;
+    if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = null; } }
+    if (!raw || typeof raw !== 'object') return null;
+    const timing = String(raw.orderTiming || raw.orderType || '').toUpperCase();
+    if (timing !== 'SCHEDULED') return null;
+    const start = raw.schedule?.deliveryDateTimeStart || raw.schedule?.scheduledDateTimeStart
+      || raw.delivery?.deliveryDateTime || raw.scheduledTo || null;
+    const ms = start ? new Date(start).getTime() : NaN;
+    return Number.isFinite(ms) ? ms : null;
+  } catch (e) {
+    console.warn(`[auto-ready] não consegui ler agendamento do pedido ${orderId}: ${e.message}`);
+    return null;
+  }
+}
+
+// Despacha o pedido iFood e carimba. Usado tanto no fluxo imediato quanto no
+// agendado (chamado na hora da janela).
+async function dispatchIfoodAndStamp(storeId, orderId, userId) {
+  await ifoodDistributed.dispatchOrder(storeId, orderId)
+    .then(() => stampAutomation('ifood', orderId, userId, 'automation_dispatched_at'))
+    .catch(e => console.warn(`[auto-ready] dispatch ${orderId}: ${e.message}`));
+}
+
 // Diz se a automação está LIGADA para uma loja específica. À PROVA DE FALHA:
 // qualquer erro/ausência de registro => considera LIGADO (nunca bloqueia por engano).
 async function isStoreAutomationEnabled(platform, storeId, userId) {
@@ -166,10 +199,23 @@ async function tryAutoAccept(platform, orderId, storeId, userId) {
               await ifoodDistributed.readyToPickup(storeId, orderId)
                 .then(() => stampAutomation(platform, orderId, userId, 'automation_ready_at'))
                 .catch(e => console.warn(`[auto-ready] readyToPickup ${orderId}: ${e.message}`));
-              await ifoodDistributed.dispatchOrder(storeId, orderId)
-                .then(() => stampAutomation(platform, orderId, userId, 'automation_dispatched_at'))
-                .catch(e => console.warn(`[auto-ready] dispatch ${orderId}: ${e.message}`));
-              console.log(`[auto-ready] pedido ${orderId} (ifood) marcado como PRONTO e DESPACHADO`);
+
+              // AGENDADO: só despacha DENTRO da janela agendada (nunca antes —
+              // foi o que reprovou na homologação). Imediato: despacha já.
+              const schedStart = await getIfoodScheduleStart(orderId, userId);
+              if (schedStart && schedStart > Date.now()) {
+                const wait = schedStart - Date.now();
+                console.log(`[auto-ready] pedido ${orderId} (ifood) é AGENDADO — despacho só na janela, em ${Math.round(wait / 60000)}min`);
+                // Timer até a janela (limite de segurança de ~24 dias do setTimeout).
+                setTimeout(() => {
+                  dispatchIfoodAndStamp(storeId, orderId, userId)
+                    .then(() => console.log(`[auto-ready] pedido AGENDADO ${orderId} DESPACHADO na janela`));
+                }, Math.min(wait, 2147483647));
+                console.log(`[auto-ready] pedido ${orderId} (ifood) marcado como PRONTO (despacho agendado)`);
+              } else {
+                await dispatchIfoodAndStamp(storeId, orderId, userId);
+                console.log(`[auto-ready] pedido ${orderId} (ifood) marcado como PRONTO e DESPACHADO`);
+              }
             } else if (platform === '99food') {
               const authToken = await food99.getValidToken(storeId);
               await food99.readyOrder(authToken, orderId)
