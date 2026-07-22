@@ -48,3 +48,14 @@ test('admin: NÃO filtra por o.user_id', async () => {
   const [sql] = pool.query.mock.calls[0];
   expect(sql).not.toMatch(/o\.user_id/);
 });
+
+test('admin com user_id na query: filtra pelo usuário escolhido', async () => {
+  const res = await request(app())
+    .get('/reports/summary?user_id=99')
+    .set('x-test-user', JSON.stringify({ id: 1, is_admin: true }));
+
+  expect(res.status).toBe(200);
+  const [sql, params] = pool.query.mock.calls[0];
+  expect(sql).toMatch(/o\.user_id = \$/);
+  expect(params).toContain('99');
+});

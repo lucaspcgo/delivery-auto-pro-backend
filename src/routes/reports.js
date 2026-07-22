@@ -9,7 +9,7 @@ router.use(authenticateToken);
 // GET /api/v1/reports/summary — relatório geral
 router.get('/summary', async (req, res) => {
   try {
-    const { start_date, end_date, platform, restaurant_id } = req.query;
+    const { start_date, end_date, platform, restaurant_id, user_id } = req.query;
     const startDate = start_date || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const endDate = end_date || new Date().toISOString().split('T')[0];
 
@@ -21,9 +21,14 @@ router.get('/summary', async (req, res) => {
     if (restaurant_id) { restaurantFilter = ` AND o.app_shop_id IN (SELECT COALESCE(platform_merchant_id, app_shop_id) FROM restaurant_platforms WHERE restaurant_id = $${idx++})`; params.push(restaurant_id); }
 
     // Isolamento por usuário: usuário comum só vê os próprios pedidos.
-    // Admin vê tudo (sem filtro de user_id).
+    // Admin vê tudo — mas PODE filtrar por um usuário específico (user_id na query),
+    // que é justamente o filtro "por cliente" do painel admin.
     let userFilter = '';
-    if (!req.user.is_admin) { userFilter = ` AND o.user_id = $${idx++}`; params.push(req.user.id); }
+    if (!req.user.is_admin) {
+      userFilter = ` AND o.user_id = $${idx++}`; params.push(req.user.id);
+    } else if (user_id) {
+      userFilter = ` AND o.user_id = $${idx++}`; params.push(user_id);
+    }
 
     const dateFilter = `DATE(o.created_at AT TIME ZONE 'America/Sao_Paulo') >= $1 AND DATE(o.created_at AT TIME ZONE 'America/Sao_Paulo') <= $2`;
 
