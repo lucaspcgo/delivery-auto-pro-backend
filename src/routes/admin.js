@@ -1,5 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const pool = require('../db/postgres');
 const router = express.Router();
@@ -71,6 +72,36 @@ router.put('/users/:id', async (req, res) => {
     if (result.rowCount === 0) return res.status(404).json({ error: 'Usuário não encontrado' });
     console.log(`[admin] usuário ${req.params.id} atualizado`);
     return res.json(result.rows[0]);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/v1/admin/users/:id/reset-password — admin redefine a senha do usuário.
+// Se vier `new_password`, usa ela; senão gera uma senha temporária e a devolve
+// para o admin repassar ao usuário. Não envia email (reset manual pelo admin).
+router.post('/users/:id/reset-password', async (req, res) => {
+  const { new_password } = req.body;
+  try {
+    let senha = new_password;
+    let gerada = false;
+    if (senha) {
+      if (String(senha).length < 6) {
+        return res.status(400).json({ error: 'A senha deve ter pelo menos 6 caracteres' });
+      }
+    } else {
+      // Gera uma senha temporária legível (ex.: "Zt7k9Qx2")
+      senha = crypto.randomBytes(6).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 8);
+      gerada = true;
+    }
+    const hash = await bcrypt.hash(String(senha), 10);
+    const result = await pool.query(
+      `UPDATE users SET password_hash=$1, updated_at=now() WHERE id=$2 RETURNING id, email`,
+      [hash, req.params.id]
+    );
+    if (result.rowCount === 0) return res.status(404).json({ error: 'Usuário não encontrado' });
+    console.log(`[admin] senha redefinida para o usuário ${req.params.id} (${result.rows[0].email})`);
+    // Só devolve a senha quando foi GERADA (pra o admin repassar). Se o admin
+    // digitou, ele já a conhece — não repetimos no corpo.
+    return res.json({ success: true, email: result.rows[0].email, ...(gerada ? { temporary_password: senha } : {}) });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
