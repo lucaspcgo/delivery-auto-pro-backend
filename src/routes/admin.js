@@ -235,4 +235,48 @@ router.get('/stats', async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
+// GET /api/v1/admin/audit — auditoria de acesso: quantos cadastros existem,
+// quando cada um foi criado e quantas lojas cada usuário tem CONECTADAS
+// (status 'authorized'), separando iFood e 99food. Só admin (router.use acima).
+router.get('/audit', async (req, res) => {
+  try {
+    const users = await pool.query(
+      `SELECT u.id, u.name, u.email, u.plan, u.active, u.is_admin,
+              u.payment_status, u.created_at,
+              COALESCE(s.stores, 0)  AS stores_connected,
+              COALESCE(s.ifood, 0)   AS ifood_stores,
+              COALESCE(s.food99, 0)  AS food99_stores
+       FROM users u
+       LEFT JOIN (
+         SELECT user_id,
+                COUNT(*) FILTER (WHERE status = 'authorized')                       AS stores,
+                COUNT(*) FILTER (WHERE status = 'authorized' AND platform = 'ifood')  AS ifood,
+                COUNT(*) FILTER (WHERE status = 'authorized' AND platform = '99food') AS food99
+         FROM restaurant_platforms
+         GROUP BY user_id
+       ) s ON s.user_id = u.id
+       ORDER BY u.created_at DESC`
+    );
+
+    const totals = users.rows.reduce((acc, u) => {
+      acc.users += 1;
+      if (u.active) acc.active_users += 1;
+      acc.stores_connected += Number(u.stores_connected);
+      acc.ifood_stores += Number(u.ifood_stores);
+      acc.food99_stores += Number(u.food99_stores);
+      return acc;
+    }, { users: 0, active_users: 0, stores_connected: 0, ifood_stores: 0, food99_stores: 0 });
+
+    return res.json({
+      summary: totals,
+      users: users.rows.map(u => ({
+        ...u,
+        stores_connected: Number(u.stores_connected),
+        ifood_stores: Number(u.ifood_stores),
+        food99_stores: Number(u.food99_stores),
+      })),
+    });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
 module.exports = router;
