@@ -7,6 +7,7 @@ const router = express.Router();
 const { JWT_SECRET } = require('../config/env');
 const { billingIntervalDays } = require('../services/billing');
 const { trialDays } = require('../config/featureFlags');
+const cora = require('../services/cora');
 
 function optionalAuth(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -98,6 +99,62 @@ router.post('/create', optionalAuth, async (req, res) => {
     }
 
     const dueDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    // Com o Cora configurado, gera a cobrança REAL (Pix + boleto) e devolve o
+    // Pix copia-e-cola / QR pro cliente pagar. Sem Cora, cai no fluxo antigo.
+    if (cora.isConfigured()) {
+      const { document, document_type } = req.body;
+      // CPF/CNPJ do pagador é obrigatório pela Cora.
+      let doc = document;
+      if (!doc) {
+        const u = await pool.query('SELECT name, company_cnpj FROM users WHERE id=$1', [userId]);
+        doc = u.rows[0] && u.rows[0].company_cnpj;
+      }
+      if (!doc) {
+        return res.status(400).json({ error: 'CPF ou CNPJ é obrigatório para gerar a cobrança.', need_document: true });
+      }
+
+      const invoice = await pool.query(
+        `INSERT INTO invoices (user_id, plan, amount, due_date, payment_method, payment_gateway, status)
+         VALUES ($1, $2, $3, $4, 'pix', 'cora', 'pending') RETURNING *`,
+        [userId, plan, amount, dueDate]
+      );
+      const ourInvoice = invoice.rows[0];
+
+      try {
+        const userRow = await pool.query('SELECT name FROM users WHERE id=$1', [userId]);
+        const coraInvoice = await cora.createInvoice({
+          code: String(ourInvoice.id),
+          customerName: (userRow.rows[0] && userRow.rows[0].name) || name || 'Cliente',
+          document: doc,
+          documentType: document_type || (String(doc).replace(/\D/g, '').length > 11 ? 'CNPJ' : 'CPF'),
+          amountCents: Math.round(Number(amount) * 100),
+          description: `Assinatura Zero Tempo — plano ${selectedPlan.name}`,
+          dueDate,
+        });
+
+        // Guarda o id da cobrança do Cora pra casar no webhook.
+        await pool.query('UPDATE invoices SET gateway_transaction_id=$1 WHERE id=$2',
+          [String(coraInvoice.id), ourInvoice.id]);
+
+        const pix = coraInvoice.pix || {};
+        const slip = coraInvoice.payment_options?.bank_slip || coraInvoice.bank_slip || {};
+        console.log(`[checkout] cobrança Cora criada: ${coraInvoice.id} (fatura ${ourInvoice.id}, R$ ${amount})`);
+        return res.json({
+          type: 'payment', gateway: 'cora',
+          invoice: { ...ourInvoice, gateway_transaction_id: String(coraInvoice.id) },
+          amount, plan, user_id: userId,
+          cora_invoice_id: coraInvoice.id,
+          pix_code: pix.emv || pix.qr_code || null,   // Pix copia-e-cola
+          boleto_url: slip.url || slip.pdf || null,
+          barcode: slip.barcode || slip.digitable || null,
+        });
+      } catch (e) {
+        console.error(`[checkout] falha ao criar cobrança no Cora (fatura ${ourInvoice.id}): ${e.message}`);
+        return res.status(502).json({ error: 'Não foi possível gerar a cobrança agora. Tente novamente.', details: e.message });
+      }
+    }
+
     const invoice = await pool.query(
       `INSERT INTO invoices (user_id, plan, amount, due_date, payment_method, payment_gateway)
        VALUES ($1, $2, $3, $4, 'pix', 'mercadopago') RETURNING *`,

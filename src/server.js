@@ -103,6 +103,7 @@ app.use('/api/v1/settings', settingsRouter);
 app.use('/api/v1/admin', adminRouter);
 app.use('/api/v1/admin/menu', menuAdminRouter);
 app.use('/api/v1/checkout', authLimiter, checkoutRouter);
+app.use('/api/v1/webhooks/cora', require('./routes/webhookscora'));
 app.use('/api/v1/plans', plansRouter);
 app.use('/api/v1/usage', usageRouter);
 
