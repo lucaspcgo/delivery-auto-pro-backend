@@ -76,6 +76,29 @@ test('gerente edita contato mas NÃO troca plano/perfil (campos são ignorados)'
   expect(params[7]).toBeUndefined(); // is_admin ignorado
 });
 
+test('escolher Perfil Admin LIGA o is_admin de verdade', async () => {
+  pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 9, role: 'admin', is_admin: true }] });
+  const res = await request(app()).put('/admin/users/9')
+    .set('Authorization', `Bearer ${adminToken()}`)
+    .send({ role: 'admin' });
+  expect(res.status).toBe(200);
+  const call = pool.query.mock.calls.find(c => /UPDATE users SET/.test(c[0]));
+  expect(call[1][6]).toBe('admin'); // role
+  expect(call[1][7]).toBe(true);    // is_admin ligado
+});
+
+test('escolher Perfil Gerente DESLIGA o is_admin', async () => {
+  // valida plano? não — sem plan no corpo. Só o UPDATE.
+  pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 9, role: 'gerente', is_admin: false }] });
+  const res = await request(app()).put('/admin/users/9')
+    .set('Authorization', `Bearer ${adminToken()}`)
+    .send({ role: 'gerente' });
+  expect(res.status).toBe(200);
+  const call = pool.query.mock.calls.find(c => /UPDATE users SET/.test(c[0]));
+  expect(call[1][6]).toBe('gerente'); // role
+  expect(call[1][7]).toBe(false);     // is_admin desligado
+});
+
 test('admin PODE trocar plano e perfil', async () => {
   // valida o plano, checa plano atual, faz o UPDATE
   pool.query

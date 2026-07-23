@@ -19,7 +19,7 @@ function staffAuth(req, res, next) {
   try {
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
-    if (!decoded.is_admin && decoded.role !== 'gerente') {
+    if (!decoded.is_admin && decoded.role !== 'gerente' && decoded.role !== 'admin') {
       return res.status(403).json({ error: 'Acesso negado — apenas equipe (gerente ou admin)' });
     }
     req.user = decoded;
@@ -76,6 +76,11 @@ router.put('/users/:id', async (req, res) => {
   // mas NÃO troca plano, perfil nem promove admin — só o admin faz isso.
   if (!req.user.is_admin) {
     plan = undefined; role = undefined; is_admin = undefined; plan_expires_at = undefined;
+  } else if (role) {
+    // O Perfil (role) é a fonte da verdade do acesso: escolher "Admin" LIGA o
+    // is_admin de verdade; "Gerente"/"Cliente" DESLIGA. Assim o dropdown de
+    // Perfil concede/remove o poder — não fica só um rótulo bonito.
+    is_admin = (role === 'admin');
   }
   try {
     // Quando o admin TROCA o plano do usuário (e não mandou uma data específica),
