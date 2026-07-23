@@ -9,6 +9,14 @@ function billingIntervalDays(period) {
   return 30; // monthly / mensal / único / gratuito (default)
 }
 
+// Dias de validade de um PLANO. Se for gratuito (is_free), vale o período de
+// teste (TRIAL_DAYS, padrão 3) — não o ciclo mensal. Senão, usa o ciclo normal.
+function planCycleDays(plan) {
+  const { trialDays } = require('../config/featureFlags');
+  if (plan && plan.is_free) return trialDays();
+  return billingIntervalDays(plan && plan.billing_period);
+}
+
 // Normaliza o período pra um dos valores canônicos aceitos pela trava do banco
 // (weekly/monthly/yearly/one_time/free). Aceita rótulos PT e inglês.
 function normalizeBillingPeriod(v) {
@@ -23,4 +31,4 @@ function normalizeBillingPeriod(v) {
 // Conjunto canônico (usado também pela trava CHECK do banco).
 const BILLING_PERIODS = ['weekly', 'monthly', 'yearly', 'one_time', 'free'];
 
-module.exports = { billingIntervalDays, normalizeBillingPeriod, BILLING_PERIODS };
+module.exports = { billingIntervalDays, planCycleDays, normalizeBillingPeriod, BILLING_PERIODS };

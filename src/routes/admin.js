@@ -3,7 +3,8 @@ const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const pool = require('../db/postgres');
-const { billingIntervalDays } = require('../services/billing');
+const { billingIntervalDays, planCycleDays } = require('../services/billing');
+const { trialDays } = require('../config/featureFlags');
 const router = express.Router();
 
 const { JWT_SECRET } = require('../config/env');
@@ -67,12 +68,13 @@ router.put('/users/:id', async (req, res) => {
     // do dia da renovação.
     let renewDays = null;
     if (plan) {
-      const planRow = await pool.query('SELECT billing_period FROM plans WHERE slug = $1 AND active = true', [plan]);
+      const planRow = await pool.query('SELECT billing_period, is_free FROM plans WHERE slug = $1 AND active = true', [plan]);
       if (planRow.rows.length === 0) return res.status(400).json({ error: 'Plano inválido' });
       if (plan_expires_at == null) {
         const cur = await pool.query('SELECT plan FROM users WHERE id = $1', [req.params.id]);
         const planoMudou = cur.rows.length > 0 && cur.rows[0].plan !== plan;
-        if (planoMudou) renewDays = billingIntervalDays(planRow.rows[0].billing_period);
+        // Free => dias de teste (3); senão o ciclo do plano.
+        if (planoMudou) renewDays = planCycleDays(planRow.rows[0]);
       }
     }
     const result = await pool.query(
@@ -131,8 +133,8 @@ router.post('/users/:id/renew', async (req, res) => {
     const u = await pool.query('SELECT id, plan, plan_expires_at FROM users WHERE id=$1', [req.params.id]);
     if (u.rows.length === 0) return res.status(404).json({ error: 'Usuário não encontrado' });
 
-    const planRow = await pool.query('SELECT billing_period FROM plans WHERE slug=$1', [u.rows[0].plan]);
-    const days = billingIntervalDays(planRow.rows[0] ? planRow.rows[0].billing_period : null);
+    const planRow = await pool.query('SELECT billing_period, is_free FROM plans WHERE slug=$1', [u.rows[0].plan]);
+    const days = planCycleDays(planRow.rows[0] || null);
 
     // Base = maior entre agora e a validade atual (renovação antecipada soma).
     const result = await pool.query(
@@ -220,8 +222,8 @@ router.put('/invoices/:id', async (req, res) => {
     if (status === 'paid') {
       const invoice = result.rows[0];
       // Validade conforme o CICLO do plano (semanal=7, mensal=30, anual=365).
-      const planRow = await pool.query('SELECT billing_period FROM plans WHERE slug=$1', [invoice.plan]);
-      const days = billingIntervalDays(planRow.rows[0] ? planRow.rows[0].billing_period : null);
+      const planRow = await pool.query('SELECT billing_period, is_free FROM plans WHERE slug=$1', [invoice.plan]);
+      const days = planCycleDays(planRow.rows[0] || null);
       await pool.query(
         `UPDATE users SET payment_status='active', plan=$1,
          plan_expires_at=(now() + ($2 || ' days')::interval), active=true, updated_at=now()
@@ -366,13 +368,15 @@ router.post('/recalculate-expiry', async (req, res) => {
     const result = await pool.query(
       `UPDATE users u
           SET plan_expires_at = u.created_at + ((CASE
+                WHEN p.is_free                                                THEN $1::int
                 WHEN lower(p.billing_period) IN ('weekly','semanal')          THEN 7
                 WHEN lower(p.billing_period) IN ('yearly','anual','annual')   THEN 365
-                ELSE 30 END) || ' days')::interval,
+                ELSE 30 END)::text || ' days')::interval,
               updated_at = now()
          FROM plans p
         WHERE p.slug = u.plan AND u.is_admin = false
-      RETURNING u.id`
+      RETURNING u.id`,
+      [trialDays()]
     );
     console.log(`[admin] validades recalculadas para ${result.rowCount} usuário(s)`);
     return res.json({ success: true, updated: result.rowCount });
