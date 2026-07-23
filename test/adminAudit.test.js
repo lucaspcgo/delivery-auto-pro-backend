@@ -41,11 +41,35 @@ test('retorna resumo e lista com data de criação e lojas conectadas', async ()
   expect(res.status).toBe(200);
   expect(res.body.summary).toEqual({
     users: 2, active_users: 1, stores_connected: 3, ifood_stores: 2, food99_stores: 1,
+    expiring_soon: 0, expired: 0,
   });
   expect(res.body.users[0].created_at).toBe('2026-07-01T00:00:00Z');
   expect(res.body.users[0].stores_connected).toBe(3); // número, não string
   expect(res.body.users[0].last_order_at).toBe('2026-07-20T10:00:00Z');
   expect(res.body.users[0].orders_total).toBe(42);
+});
+
+test('marca vencendo/vencido/ok conforme dias restantes', async () => {
+  const dia = 86400000;
+  const base = { name: 'x', email: 'x@x.com', plan: 'pro', active: true, is_admin: false,
+    payment_status: 'active', created_at: '2026-01-01T00:00:00Z',
+    stores_connected: '0', ifood_stores: '0', food99_stores: '0', last_order_at: null, orders_total: '0' };
+  pool.query.mockResolvedValueOnce({ rows: [
+    { ...base, plan_expires_at: new Date(Date.now() + 10 * dia).toISOString() }, // ok
+    { ...base, plan_expires_at: new Date(Date.now() + 1 * dia).toISOString() },  // vencendo (<=3)
+    { ...base, plan_expires_at: new Date(Date.now() - 1 * dia).toISOString() },  // vencido
+  ] });
+
+  const res = await request(app())
+    .get('/admin/audit')
+    .set('Authorization', `Bearer ${adminToken()}`);
+
+  expect(res.status).toBe(200);
+  expect(res.body.users[0].expiry_status).toBe('ok');
+  expect(res.body.users[1].expiry_status).toBe('vencendo');
+  expect(res.body.users[2].expiry_status).toBe('vencido');
+  expect(res.body.summary.expiring_soon).toBe(1);
+  expect(res.body.summary.expired).toBe(1);
 });
 
 test('sem token de admin -> 401/403', async () => {

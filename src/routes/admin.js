@@ -311,25 +311,46 @@ router.get('/audit', async (req, res) => {
        ORDER BY u.created_at DESC`
     );
 
-    const totals = users.rows.reduce((acc, u) => {
-      acc.users += 1;
-      if (u.active) acc.active_users += 1;
-      acc.stores_connected += Number(u.stores_connected);
-      acc.ifood_stores += Number(u.ifood_stores);
-      acc.food99_stores += Number(u.food99_stores);
-      return acc;
-    }, { users: 0, active_users: 0, stores_connected: 0, ifood_stores: 0, food99_stores: 0 });
+    // Janela de aviso: a partir de quantos dias antes do vencimento marcamos
+    // como "vencendo" (padrão 3, ajustável por env AUDIT_EXPIRING_DAYS).
+    const avisoDias = Number(process.env.AUDIT_EXPIRING_DAYS) > 0 ? Number(process.env.AUDIT_EXPIRING_DAYS) : 3;
+    const agora = Date.now();
 
-    return res.json({
-      summary: totals,
-      users: users.rows.map(u => ({
+    // Calcula, por usuário: dias restantes e situação (ok/vencendo/vencido).
+    // Admin e conta sem validade não entram no aviso.
+    const withStatus = users.rows.map(u => {
+      let days_until_expiry = null;
+      let expiry_status = 'sem_validade'; // sem data (ex.: admin/free permanente)
+      if (u.plan_expires_at && !u.is_admin) {
+        const diffMs = new Date(u.plan_expires_at).getTime() - agora;
+        days_until_expiry = Math.ceil(diffMs / 86400000);
+        if (days_until_expiry < 0) expiry_status = 'vencido';
+        else if (days_until_expiry <= avisoDias) expiry_status = 'vencendo';
+        else expiry_status = 'ok';
+      }
+      return {
         ...u,
         stores_connected: Number(u.stores_connected),
         ifood_stores: Number(u.ifood_stores),
         food99_stores: Number(u.food99_stores),
         orders_total: Number(u.orders_total),
-      })),
+        days_until_expiry,
+        expiry_status,
+      };
     });
+
+    const totals = withStatus.reduce((acc, u) => {
+      acc.users += 1;
+      if (u.active) acc.active_users += 1;
+      acc.stores_connected += u.stores_connected;
+      acc.ifood_stores += u.ifood_stores;
+      acc.food99_stores += u.food99_stores;
+      if (u.expiry_status === 'vencendo') acc.expiring_soon += 1;
+      if (u.expiry_status === 'vencido') acc.expired += 1;
+      return acc;
+    }, { users: 0, active_users: 0, stores_connected: 0, ifood_stores: 0, food99_stores: 0, expiring_soon: 0, expired: 0 });
+
+    return res.json({ summary: totals, warning_days: avisoDias, users: withStatus });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
