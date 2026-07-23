@@ -6,6 +6,7 @@
 //   CORA_KEY        — conteúdo da chave privada (.key) OU base64 dela
 //   CORA_ENV        — 'stage' (teste, padrão) ou 'production'
 const https = require('https');
+const crypto = require('crypto');
 
 function baseHost() {
   return (process.env.CORA_ENV || 'stage').toLowerCase() === 'production'
@@ -86,6 +87,7 @@ async function apiRequest(method, path, jsonBody, idempotencyKey) {
 // Cria uma cobrança (Pix + boleto). amountCents em centavos. dueDate 'AAAA-MM-DD'.
 // document = CPF/CNPJ do pagador (obrigatório pela Cora).
 async function createInvoice({ code, customerName, document, documentType, amountCents, description, dueDate }) {
+  // A Cora exige Idempotency-Key no formato UUID (não aceita o nosso id/code).
   return apiRequest('POST', '/v2/invoices/', {
     code,
     customer: {
@@ -99,7 +101,21 @@ async function createInvoice({ code, customerName, document, documentType, amoun
     }],
     payment_terms: { due_date: dueDate },
     payment_forms: ['BANK_SLIP', 'PIX'],
-  }, code);
+  }, crypto.randomUUID());
+}
+
+// Extrai os dados de pagamento (Pix copia-e-cola e boleto) de uma cobrança Cora.
+// O Pix (pix.emv) pode vir null logo após criar e preenche em alguns segundos.
+function extractPayment(coraInvoice) {
+  const pix = (coraInvoice && coraInvoice.pix) || {};
+  const slip = (coraInvoice && coraInvoice.payment_options && coraInvoice.payment_options.bank_slip) || {};
+  return {
+    status: coraInvoice && (coraInvoice.status || coraInvoice.state),
+    pix_code: pix.emv || pix.qr_code || null,
+    boleto_url: slip.url || slip.pdf || null,
+    barcode: slip.barcode || null,
+    digitable: slip.digitable || null,
+  };
 }
 
 // Consulta uma cobrança pelo id do Cora (usado no webhook pra CONFIRMAR o
@@ -108,4 +124,4 @@ async function getInvoice(id) {
   return apiRequest('GET', `/v2/invoices/${id}`, null);
 }
 
-module.exports = { isConfigured, getToken, createInvoice, getInvoice };
+module.exports = { isConfigured, getToken, createInvoice, getInvoice, extractPayment };

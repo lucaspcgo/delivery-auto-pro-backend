@@ -137,17 +137,17 @@ router.post('/create', optionalAuth, async (req, res) => {
         await pool.query('UPDATE invoices SET gateway_transaction_id=$1 WHERE id=$2',
           [String(coraInvoice.id), ourInvoice.id]);
 
-        const pix = coraInvoice.pix || {};
-        const slip = coraInvoice.payment_options?.bank_slip || coraInvoice.bank_slip || {};
+        const pay = cora.extractPayment(coraInvoice);
         console.log(`[checkout] cobrança Cora criada: ${coraInvoice.id} (fatura ${ourInvoice.id}, R$ ${amount})`);
         return res.json({
           type: 'payment', gateway: 'cora',
           invoice: { ...ourInvoice, gateway_transaction_id: String(coraInvoice.id) },
           amount, plan, user_id: userId,
           cora_invoice_id: coraInvoice.id,
-          pix_code: pix.emv || pix.qr_code || null,   // Pix copia-e-cola
-          boleto_url: slip.url || slip.pdf || null,
-          barcode: slip.barcode || slip.digitable || null,
+          pix_code: pay.pix_code,       // Pix copia-e-cola (pode vir null; buscar no /status)
+          boleto_url: pay.boleto_url,   // PDF do boleto
+          barcode: pay.barcode,
+          digitable: pay.digitable,     // linha digitável do boleto
         });
       } catch (e) {
         console.error(`[checkout] falha ao criar cobrança no Cora (fatura ${ourInvoice.id}): ${e.message}`);
@@ -215,7 +215,25 @@ router.get('/status/:invoiceId', async (req, res) => {
        FROM invoices i JOIN users u ON u.id = i.user_id WHERE i.id=$1`, [req.params.invoiceId]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Fatura não encontrada' });
-    return res.json(result.rows[0]);
+    const inv = result.rows[0];
+
+    // Se é cobrança Cora e ainda não paga, busca na Cora o Pix (que fica pronto
+    // alguns segundos depois) e o status atual. Se já caiu, libera o plano na hora.
+    if (inv.payment_gateway === 'cora' && inv.status !== 'paid' && inv.gateway_transaction_id && cora.isConfigured()) {
+      try {
+        const coraInv = await cora.getInvoice(inv.gateway_transaction_id);
+        const pay = cora.extractPayment(coraInv);
+        if (String(pay.status).toUpperCase() === 'PAID') {
+          const { markInvoicePaidAndActivate } = require('../services/planActivation');
+          await markInvoicePaidAndActivate(inv.id, String(inv.gateway_transaction_id));
+          inv.status = 'paid';
+        }
+        return res.json({ ...inv, cora_status: pay.status, pix_code: pay.pix_code, boleto_url: pay.boleto_url, digitable: pay.digitable });
+      } catch (e) {
+        console.warn(`[checkout] status Cora falhou p/ fatura ${inv.id}: ${e.message}`);
+      }
+    }
+    return res.json(inv);
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
