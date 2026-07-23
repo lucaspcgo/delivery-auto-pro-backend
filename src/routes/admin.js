@@ -59,17 +59,29 @@ router.get('/users/:id', async (req, res) => {
 router.put('/users/:id', async (req, res) => {
   const { name, email, phone, plan, active, payment_status, role, is_admin, plan_expires_at } = req.body;
   try {
+    // Quando o admin TROCA o plano do usuário (e não mandou uma data específica),
+    // a validade do bloqueio passa a valer o CICLO do novo plano (semanal=7,
+    // mensal=30, anual=365 dias), contando a partir de agora.
+    let renewDays = null;
     if (plan) {
-      const ok = await pool.query('SELECT 1 FROM plans WHERE slug = $1 AND active = true', [plan]);
-      if (ok.rows.length === 0) return res.status(400).json({ error: 'Plano inválido' });
+      const planRow = await pool.query('SELECT billing_period FROM plans WHERE slug = $1 AND active = true', [plan]);
+      if (planRow.rows.length === 0) return res.status(400).json({ error: 'Plano inválido' });
+      if (plan_expires_at == null) {
+        const cur = await pool.query('SELECT plan FROM users WHERE id = $1', [req.params.id]);
+        const planoMudou = cur.rows.length > 0 && cur.rows[0].plan !== plan;
+        if (planoMudou) renewDays = billingIntervalDays(planRow.rows[0].billing_period);
+      }
     }
     const result = await pool.query(
       `UPDATE users SET name=COALESCE($1,name), email=COALESCE($2,email), phone=COALESCE($3,phone),
        plan=COALESCE($4,plan), active=COALESCE($5,active), payment_status=COALESCE($6,payment_status),
-       role=COALESCE($7,role), is_admin=COALESCE($8,is_admin), plan_expires_at=COALESCE($9,plan_expires_at),
+       role=COALESCE($7,role), is_admin=COALESCE($8,is_admin),
+       plan_expires_at = CASE WHEN $10::int IS NOT NULL THEN now() + ($10 || ' days')::interval
+                              ELSE COALESCE($9, plan_expires_at) END,
        updated_at=now()
-       WHERE id=$10 RETURNING id, name, email, phone, plan, active, payment_status, role, is_admin`,
-      [name, email, phone, plan, active, payment_status, role, is_admin, plan_expires_at, req.params.id]
+       WHERE id=$11 RETURNING id, name, email, phone, plan, active, payment_status, role, is_admin, plan_expires_at`,
+      [name, email, phone, plan, active, payment_status, role, is_admin, plan_expires_at,
+       renewDays != null ? String(renewDays) : null, req.params.id]
     );
     if (result.rowCount === 0) return res.status(404).json({ error: 'Usuário não encontrado' });
     console.log(`[admin] usuário ${req.params.id} atualizado`);
@@ -275,12 +287,15 @@ router.get('/audit', async (req, res) => {
     const users = await pool.query(
       `SELECT u.id, u.name, u.email, u.plan, u.active, u.is_admin,
               u.payment_status, u.created_at,
+              u.plan_expires_at,
+              p.billing_period,
               COALESCE(s.stores, 0)  AS stores_connected,
               COALESCE(s.ifood, 0)   AS ifood_stores,
               COALESCE(s.food99, 0)  AS food99_stores,
               o.last_order_at,
               COALESCE(o.orders_total, 0) AS orders_total
        FROM users u
+       LEFT JOIN plans p ON p.slug = u.plan
        LEFT JOIN (
          SELECT user_id,
                 COUNT(*) FILTER (WHERE status = 'authorized')                       AS stores,
