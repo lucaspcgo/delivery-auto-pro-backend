@@ -61,7 +61,10 @@ router.put('/users/:id', async (req, res) => {
   try {
     // Quando o admin TROCA o plano do usuário (e não mandou uma data específica),
     // a validade do bloqueio passa a valer o CICLO do novo plano (semanal=7,
-    // mensal=30, anual=365 dias), contando a partir de agora.
+    // mensal=30, anual=365 dias), contando a partir da DATA DE CRIAÇÃO da conta
+    // (não de hoje). Ex.: criada dia 22 no Starter (7 dias) => vence dia 29.
+    // A RENOVAÇÃO (botão Renovar / fatura paga) é que conta pra frente a partir
+    // do dia da renovação.
     let renewDays = null;
     if (plan) {
       const planRow = await pool.query('SELECT billing_period FROM plans WHERE slug = $1 AND active = true', [plan]);
@@ -76,7 +79,7 @@ router.put('/users/:id', async (req, res) => {
       `UPDATE users SET name=COALESCE($1,name), email=COALESCE($2,email), phone=COALESCE($3,phone),
        plan=COALESCE($4,plan), active=COALESCE($5,active), payment_status=COALESCE($6,payment_status),
        role=COALESCE($7,role), is_admin=COALESCE($8,is_admin),
-       plan_expires_at = CASE WHEN $10::int IS NOT NULL THEN now() + ($10 || ' days')::interval
+       plan_expires_at = CASE WHEN $10::int IS NOT NULL THEN created_at + ($10 || ' days')::interval
                               ELSE COALESCE($9, plan_expires_at) END,
        updated_at=now()
        WHERE id=$11 RETURNING id, name, email, phone, plan, active, payment_status, role, is_admin, plan_expires_at`,
