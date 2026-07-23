@@ -357,6 +357,28 @@ router.get('/audit', async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
+// POST /api/v1/admin/recalculate-expiry — recalcula a validade de TODOS os
+// clientes (não-admin) de uma vez: plan_expires_at = data de criação + ciclo do
+// plano (semanal=7, mensal=30, anual=365). Útil pra alinhar todo mundo à regra
+// depois de trocar planos em massa. Não mexe em payment_status.
+router.post('/recalculate-expiry', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE users u
+          SET plan_expires_at = u.created_at + ((CASE
+                WHEN lower(p.billing_period) IN ('weekly','semanal')          THEN 7
+                WHEN lower(p.billing_period) IN ('yearly','anual','annual')   THEN 365
+                ELSE 30 END) || ' days')::interval,
+              updated_at = now()
+         FROM plans p
+        WHERE p.slug = u.plan AND u.is_admin = false
+      RETURNING u.id`
+    );
+    console.log(`[admin] validades recalculadas para ${result.rowCount} usuário(s)`);
+    return res.json({ success: true, updated: result.rowCount });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
 // GET /api/v1/admin/notifications — alimenta o sininho do painel admin.
 // Junta avisos úteis: usuários vencidos, vencendo, novos cadastros do dia e
 // faturas pendentes. Só admin.
