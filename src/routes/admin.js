@@ -354,4 +354,57 @@ router.get('/audit', async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
+// GET /api/v1/admin/notifications — alimenta o sininho do painel admin.
+// Junta avisos úteis: usuários vencidos, vencendo, novos cadastros do dia e
+// faturas pendentes. Só admin.
+router.get('/notifications', async (req, res) => {
+  try {
+    const avisoDias = Number(process.env.AUDIT_EXPIRING_DAYS) > 0 ? Number(process.env.AUDIT_EXPIRING_DAYS) : 3;
+
+    const venc = await pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE plan_expires_at < now())::int AS vencidos,
+         COUNT(*) FILTER (WHERE plan_expires_at >= now()
+                            AND plan_expires_at < now() + ($1 || ' days')::interval)::int AS vencendo
+       FROM users
+       WHERE is_admin = false AND active = true AND plan_expires_at IS NOT NULL`,
+      [String(avisoDias)]
+    );
+    const novos = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM users
+        WHERE DATE(created_at AT TIME ZONE 'America/Sao_Paulo') = DATE(now() AT TIME ZONE 'America/Sao_Paulo')`
+    );
+    const faturas = await pool.query(`SELECT COUNT(*)::int AS n FROM invoices WHERE status = 'pending'`);
+
+    const v = venc.rows[0];
+    const notifications = [];
+    if (v.vencidos > 0) notifications.push({
+      type: 'plan_expired', severity: 'high',
+      title: 'Clientes com plano vencido',
+      message: `${v.vencidos} cliente(s) com o plano vencido`,
+      count: v.vencidos, link: '/admin?tab=auditoria',
+    });
+    if (v.vencendo > 0) notifications.push({
+      type: 'plan_expiring', severity: 'medium',
+      title: 'Clientes vencendo em breve',
+      message: `${v.vencendo} cliente(s) vencem em até ${avisoDias} dia(s)`,
+      count: v.vencendo, link: '/admin?tab=auditoria',
+    });
+    if (faturas.rows[0].n > 0) notifications.push({
+      type: 'invoice_pending', severity: 'medium',
+      title: 'Faturas pendentes',
+      message: `${faturas.rows[0].n} fatura(s) aguardando pagamento`,
+      count: faturas.rows[0].n, link: '/admin?tab=faturas',
+    });
+    if (novos.rows[0].n > 0) notifications.push({
+      type: 'new_signups', severity: 'info',
+      title: 'Novos cadastros hoje',
+      message: `${novos.rows[0].n} novo(s) cadastro(s) hoje`,
+      count: novos.rows[0].n, link: '/admin?tab=usuarios',
+    });
+
+    return res.json({ unread_count: notifications.length, notifications });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
 module.exports = router;
