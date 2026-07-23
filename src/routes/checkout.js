@@ -28,7 +28,7 @@ router.get('/plans', async (req, res) => {
 });
 
 router.post('/create', optionalAuth, async (req, res) => {
-  const { plan, name, email, password } = req.body;
+  const { plan, name, email, password, phone } = req.body;
   if (!plan) return res.status(400).json({ error: 'Plano é obrigatório' });
 
   try {
@@ -57,9 +57,9 @@ router.post('/create', optionalAuth, async (req, res) => {
 
       if (selectedPlan.is_free) {
         const newUser = await pool.query(
-          `INSERT INTO users (name, email, password_hash, plan, payment_status, plan_expires_at)
-           VALUES ($1, $2, $3, $4, 'active', now() + ($5 || ' days')::interval) RETURNING *`,
-          [name, email, hash, plan, String(trialDays())]
+          `INSERT INTO users (name, email, password_hash, phone, plan, payment_status, plan_expires_at)
+           VALUES ($1, $2, $3, $4, $5, 'active', now() + ($6 || ' days')::interval) RETURNING *`,
+          [name, email, hash, phone || null, plan, String(trialDays())]
         );
         const u = newUser.rows[0];
 
@@ -81,9 +81,9 @@ router.post('/create', optionalAuth, async (req, res) => {
       }
 
       const newUser = await pool.query(
-        `INSERT INTO users (name, email, password_hash, plan, payment_status)
-         VALUES ($1, $2, $3, $4, 'pending') RETURNING id`,
-        [name, email, hash, plan]
+        `INSERT INTO users (name, email, password_hash, phone, plan, payment_status)
+         VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING id`,
+        [name, email, hash, phone || null, plan]
       );
       userId = newUser.rows[0].id;
 
