@@ -313,24 +313,156 @@ router.put('/settings/:key', adminOnly, async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/v1/admin/stats — estatísticas gerais do admin
+// GET /api/v1/admin/stats — estatísticas gerais do admin (visão de decisão).
+// Mantém os campos originais (users/invoices/restaurants/orders) e adiciona
+// métricas novas: crescimento de clientes, MRR estimado, cobrança em atraso,
+// retenção (vencendo/vencidos) e desempenho da automação.
 router.get('/stats', async (req, res) => {
+  const n = (v) => parseInt(v, 10) || 0;
+  const f = (v) => parseFloat(v) || 0;
   try {
-    const users = await pool.query(`SELECT COUNT(*) as total, COUNT(CASE WHEN active THEN 1 END) as ativos FROM users`);
-    const byPlan = await pool.query(`SELECT plan, COUNT(*) as total FROM users WHERE active=true GROUP BY plan`);
-    const invoices = await pool.query(
-      `SELECT COUNT(*) as total, COALESCE(SUM(CASE WHEN status='paid' THEN amount END),0) as receita,
-       COUNT(CASE WHEN status='pending' THEN 1 END) as pendentes,
-       COUNT(CASE WHEN status='paid' THEN 1 END) as pagas
-       FROM invoices`
-    );
-    const restaurants = await pool.query(`SELECT COUNT(*) as total FROM restaurants WHERE active=true`);
-    const orders = await pool.query(`SELECT COUNT(*) as total, COALESCE(SUM(total_price),0) as gmv FROM orders`);
+    const users = await pool.query(`
+      SELECT
+        COUNT(*)                                                          AS total,
+        COUNT(*) FILTER (WHERE active)                                    AS ativos,
+        COUNT(*) FILTER (WHERE NOT active)                                AS inativos,
+        COUNT(*) FILTER (WHERE payment_status = 'suspended')              AS suspensos,
+        COUNT(*) FILTER (WHERE role = 'gerente')                          AS gerentes,
+        COUNT(*) FILTER (WHERE is_admin)                                  AS admins,
+        COUNT(*) FILTER (WHERE created_at >= date_trunc('month', now()))  AS novos_mes,
+        COUNT(*) FILTER (WHERE created_at >= date_trunc('month', now() - interval '1 month')
+                           AND created_at <  date_trunc('month', now()))  AS novos_mes_anterior,
+        COUNT(*) FILTER (WHERE created_at >= now() - interval '7 days')   AS novos_semana,
+        COUNT(*) FILTER (WHERE active AND NOT is_admin AND plan_expires_at IS NOT NULL
+                           AND plan_expires_at >= now()
+                           AND plan_expires_at <  now() + interval '7 days') AS vencendo_7d,
+        COUNT(*) FILTER (WHERE active AND NOT is_admin AND plan_expires_at IS NOT NULL
+                           AND plan_expires_at < now())                    AS vencidos
+      FROM users`);
+    const u = users.rows[0];
+
+    const byPlan = await pool.query(`SELECT plan, COUNT(*) as total FROM users WHERE active=true GROUP BY plan ORDER BY total DESC`);
+
+    const invoices = await pool.query(`
+      SELECT
+        COUNT(*)                                                                 AS total,
+        COALESCE(SUM(amount) FILTER (WHERE status='paid'), 0)                     AS receita,
+        COALESCE(SUM(amount) FILTER (WHERE status='paid'
+                    AND paid_at >= date_trunc('month', now())), 0)               AS receita_mes,
+        COALESCE(SUM(amount) FILTER (WHERE status='paid'
+                    AND paid_at >= date_trunc('month', now() - interval '1 month')
+                    AND paid_at <  date_trunc('month', now())), 0)               AS receita_mes_anterior,
+        COUNT(*) FILTER (WHERE status='pending')                                 AS pendentes,
+        COALESCE(SUM(amount) FILTER (WHERE status='pending'), 0)                 AS pendentes_valor,
+        COUNT(*) FILTER (WHERE status='pending' AND due_date < CURRENT_DATE)     AS em_atraso,
+        COALESCE(SUM(amount) FILTER (WHERE status='pending'
+                    AND due_date < CURRENT_DATE), 0)                             AS em_atraso_valor,
+        COUNT(*) FILTER (WHERE status='paid')                                    AS pagas
+      FROM invoices`);
+    const inv = invoices.rows[0];
+
+    // MRR estimado: normaliza o preço do plano pelo ciclo (semanal ~4.33/mês,
+    // mensal x1, anual /12) dos assinantes ATIVOS e pagantes (fora admin/free).
+    const mrr = await pool.query(`
+      SELECT
+        COALESCE(SUM(CASE p.billing_period
+          WHEN 'weekly' THEN p.price * 4.33
+          WHEN 'yearly' THEN p.price / 12.0
+          WHEN 'one_time' THEN 0
+          ELSE p.price END), 0)                          AS mrr,
+        COUNT(*)                                          AS assinantes_pagantes
+      FROM users us JOIN plans p ON p.slug = us.plan
+      WHERE us.active = true AND us.is_admin = false
+        AND COALESCE(p.is_free, false) = false
+        AND us.payment_status = 'active'`);
+
+    const restaurants = await pool.query(`
+      SELECT COUNT(*) AS total,
+             COUNT(*) FILTER (WHERE created_at >= date_trunc('month', now())) AS novos_mes
+      FROM restaurants WHERE active=true`);
+
+    let plat = { ifood: 0, food99: 0 };
+    try {
+      const p = await pool.query(`
+        SELECT COUNT(*) FILTER (WHERE status='authorized' AND platform='ifood')  AS ifood,
+               COUNT(*) FILTER (WHERE status='authorized' AND platform='99food') AS food99
+        FROM restaurant_platforms`);
+      plat = { ifood: n(p.rows[0].ifood), food99: n(p.rows[0].food99) };
+    } catch (e) { /* tabela pode não existir em algum ambiente */ }
+
+    const orders = await pool.query(`
+      SELECT COUNT(*)                                                        AS total,
+             COALESCE(SUM(total_price), 0)                                   AS gmv,
+             COUNT(*) FILTER (WHERE created_at >= date_trunc('month', now())) AS pedidos_mes,
+             COALESCE(SUM(total_price) FILTER (WHERE created_at >= date_trunc('month', now())), 0) AS gmv_mes,
+             COUNT(*) FILTER (WHERE DATE(created_at AT TIME ZONE 'America/Sao_Paulo')
+                                  = DATE(now() AT TIME ZONE 'America/Sao_Paulo')) AS pedidos_hoje,
+             COUNT(*) FILTER (WHERE status='cancelled')                      AS cancelados
+      FROM orders`);
+    const o = orders.rows[0];
+
+    // Desempenho da automação: quantos pedidos foram marcados "pronto" pela
+    // nossa API (coluna carimbada). Tolerante a ambiente sem a coluna ainda.
+    let automatizados = 0, automatizados_mes = 0;
+    try {
+      const a = await pool.query(`
+        SELECT COUNT(*) FILTER (WHERE automation_ready_at IS NOT NULL) AS auto,
+               COUNT(*) FILTER (WHERE automation_ready_at IS NOT NULL
+                                 AND automation_ready_at >= date_trunc('month', now())) AS auto_mes
+        FROM orders`);
+      automatizados = n(a.rows[0].auto); automatizados_mes = n(a.rows[0].auto_mes);
+    } catch (e) { /* coluna automation_ready_at pode não existir */ }
+
+    const receitaMes = f(inv.receita_mes), receitaMesAnt = f(inv.receita_mes_anterior);
+    const crescimentoReceita = receitaMesAnt > 0
+      ? Math.round(((receitaMes - receitaMesAnt) / receitaMesAnt) * 100)
+      : (receitaMes > 0 ? 100 : 0);
+    const pedidosMes = n(o.pedidos_mes);
+    const taxaAutomacaoMes = pedidosMes > 0 ? Math.round((automatizados_mes / pedidosMes) * 100) : 0;
+
     return res.json({
-      users: { total: parseInt(users.rows[0].total), ativos: parseInt(users.rows[0].ativos), por_plano: byPlan.rows },
-      invoices: { total: parseInt(invoices.rows[0].total), receita: parseFloat(invoices.rows[0].receita), pendentes: parseInt(invoices.rows[0].pendentes), pagas: parseInt(invoices.rows[0].pagas) },
-      restaurants: parseInt(restaurants.rows[0].total),
-      orders: { total: parseInt(orders.rows[0].total), gmv: parseFloat(orders.rows[0].gmv) }
+      // --- campos originais (compatibilidade) ---
+      users: { total: n(u.total), ativos: n(u.ativos), por_plano: byPlan.rows },
+      invoices: { total: n(inv.total), receita: f(inv.receita), pendentes: n(inv.pendentes), pagas: n(inv.pagas) },
+      restaurants: n(restaurants.rows[0].total),
+      orders: { total: n(o.total), gmv: f(o.gmv) },
+
+      // --- novas métricas de decisão ---
+      clientes: {
+        total: n(u.total), ativos: n(u.ativos), inativos: n(u.inativos),
+        suspensos: n(u.suspensos), gerentes: n(u.gerentes), admins: n(u.admins),
+        novos_mes: n(u.novos_mes), novos_mes_anterior: n(u.novos_mes_anterior),
+        novos_semana: n(u.novos_semana),
+        vencendo_7d: n(u.vencendo_7d), vencidos: n(u.vencidos),
+        por_plano: byPlan.rows,
+      },
+      financeiro: {
+        receita_total: f(inv.receita),
+        receita_mes: receitaMes,
+        receita_mes_anterior: receitaMesAnt,
+        crescimento_receita_pct: crescimentoReceita,
+        mrr_estimado: Math.round(f(mrr.rows[0].mrr) * 100) / 100,
+        assinantes_pagantes: n(mrr.rows[0].assinantes_pagantes),
+        faturas_pendentes: n(inv.pendentes),
+        pendentes_valor: f(inv.pendentes_valor),
+        em_atraso: n(inv.em_atraso),
+        em_atraso_valor: f(inv.em_atraso_valor),
+      },
+      operacao: {
+        restaurantes: n(restaurants.rows[0].total),
+        restaurantes_novos_mes: n(restaurants.rows[0].novos_mes),
+        lojas_ifood: plat.ifood,
+        lojas_99food: plat.food99,
+        pedidos_total: n(o.total),
+        pedidos_mes: pedidosMes,
+        pedidos_hoje: n(o.pedidos_hoje),
+        cancelados: n(o.cancelados),
+        gmv_total: f(o.gmv),
+        gmv_mes: f(o.gmv_mes),
+        automatizados_total: automatizados,
+        automatizados_mes: automatizados_mes,
+        taxa_automacao_mes_pct: taxaAutomacaoMes,
+      },
     });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
