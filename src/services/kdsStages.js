@@ -90,9 +90,11 @@ function availableActions(platform, stage) {
     case 'preparando': acts = ['ready', 'cancel']; break;
     // Saiu p/ entrega só existe no iFood (e apenas entrega própria da loja)
     case 'aguardando': acts = platform === 'ifood' ? ['dispatch', 'cancel'] : ['cancel']; break;
-    // Etapas finais/controladas pela plataforma: sem botões
+    // Saiu p/ entrega e a caminho do destino: o iFood AINDA permite cancelar
+    // (ex.: problema na entrega). Mantém o botão Cancelar disponível.
     case 'entregando':
-    case 'no_destino':
+    case 'no_destino': acts = ['cancel']; break;
+    // Etapas realmente finais: sem botões.
     case 'entregue':
     case 'cancelado':  acts = []; break;
     // Desconhecido ("outros"): oferece o fluxo manual completo como PLANO B,
