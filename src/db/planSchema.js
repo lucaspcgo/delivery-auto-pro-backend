@@ -22,6 +22,19 @@ function ensurePlanSchema() {
         `ALTER TABLE plans ADD CONSTRAINT plans_billing_period_check
            CHECK (billing_period IN ('weekly','monthly','yearly','one_time','free'))`
       );
+      // A trava antiga de role só aceitava 'user'/'admin' e recusava o novo
+      // perfil 'gerente' (erro 500 ao salvar). Recria aceitando os 3 perfis.
+      // Isolado num try: se houver algum valor legado fora da lista, apenas
+      // registra e segue (não derruba o resto da migração).
+      try {
+        await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check`);
+        await pool.query(
+          `ALTER TABLE users ADD CONSTRAINT users_role_check
+             CHECK (role IN ('user','gerente','admin'))`
+        );
+      } catch (e) {
+        console.error('[planSchema] não foi possível atualizar users_role_check:', e.message);
+      }
       // Garante que o plano free (padrão de trial/downgrade) exista.
       await pool.query(
         `INSERT INTO plans (slug, name, price, billing_period, is_free, active, capabilities, max_restaurants, max_orders_month)
