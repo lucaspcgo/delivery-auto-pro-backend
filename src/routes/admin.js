@@ -9,20 +9,33 @@ const router = express.Router();
 
 const { JWT_SECRET } = require('../config/env');
 
-// Middleware admin
-function adminAuth(req, res, next) {
+// Middleware da EQUIPE: libera admin OU gerente no Painel Administrativo.
+// O gerente cuida da cobrança (ver/filtrar faturas, marcar paga, renovar,
+// suspender/reativar) mas NÃO mexe em planos, perfis nem exclui usuários —
+// isso é barrado endpoint a endpoint pelo `adminOnly`.
+function staffAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) return res.status(401).json({ error: 'Token não fornecido' });
   try {
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
-    if (!decoded.is_admin) return res.status(403).json({ error: 'Acesso negado — apenas administradores' });
+    if (!decoded.is_admin && decoded.role !== 'gerente') {
+      return res.status(403).json({ error: 'Acesso negado — apenas equipe (gerente ou admin)' });
+    }
     req.user = decoded;
     next();
   } catch (err) { return res.status(401).json({ error: 'Token inválido' }); }
 }
 
-router.use(adminAuth);
+// Barra o gerente nas ações estruturais (só admin passa).
+function adminOnly(req, res, next) {
+  if (!req.user || !req.user.is_admin) {
+    return res.status(403).json({ error: 'Acesso negado — apenas administradores' });
+  }
+  next();
+}
+
+router.use(staffAuth);
 
 // GET /api/v1/admin/users — listar todos os usuários
 router.get('/users', async (req, res) => {
@@ -58,7 +71,12 @@ router.get('/users/:id', async (req, res) => {
 
 // PUT /api/v1/admin/users/:id — atualizar usuário (plano, status, etc)
 router.put('/users/:id', async (req, res) => {
-  const { name, email, phone, plan, active, payment_status, role, is_admin, plan_expires_at } = req.body;
+  let { name, email, phone, plan, active, payment_status, role, is_admin, plan_expires_at } = req.body;
+  // O gerente pode editar contato e mexer no acesso (active/payment_status),
+  // mas NÃO troca plano, perfil nem promove admin — só o admin faz isso.
+  if (!req.user.is_admin) {
+    plan = undefined; role = undefined; is_admin = undefined; plan_expires_at = undefined;
+  }
   try {
     // Quando o admin TROCA o plano do usuário (e não mandou uma data específica),
     // a validade do bloqueio passa a valer o CICLO do novo plano (semanal=7,
@@ -97,7 +115,7 @@ router.put('/users/:id', async (req, res) => {
 // POST /api/v1/admin/users/:id/reset-password — admin redefine a senha do usuário.
 // Se vier `new_password`, usa ela; senão gera uma senha temporária e a devolve
 // para o admin repassar ao usuário. Não envia email (reset manual pelo admin).
-router.post('/users/:id/reset-password', async (req, res) => {
+router.post('/users/:id/reset-password', adminOnly, async (req, res) => {
   const { new_password } = req.body;
   try {
     let senha = new_password;
@@ -152,7 +170,7 @@ router.post('/users/:id/renew', async (req, res) => {
 });
 
 // POST /api/v1/admin/users — criar novo usuário
-router.post('/users', async (req, res) => {
+router.post('/users', adminOnly, async (req, res) => {
   const { name, email, password, plan, role } = req.body;
   if (!name || !email || !password) return res.status(400).json({ error: 'Nome, email e senha são obrigatórios' });
   try {
@@ -170,7 +188,7 @@ router.post('/users', async (req, res) => {
 });
 
 // DELETE /api/v1/admin/users/:id — desativar usuário
-router.delete('/users/:id', async (req, res) => {
+router.delete('/users/:id', adminOnly, async (req, res) => {
   try {
     await pool.query('UPDATE users SET active=false, updated_at=now() WHERE id=$1', [req.params.id]);
     return res.json({ success: true });
@@ -179,17 +197,42 @@ router.delete('/users/:id', async (req, res) => {
 
 // GET /api/v1/admin/invoices — listar todas as faturas
 router.get('/invoices', async (req, res) => {
-  const { status, user_id } = req.query;
+  // Filtros de cobrança: status, cliente, período (from/to em created_at) e
+  // "só em atraso" (overdue=1 => pendentes com vencimento no passado).
+  const { status, user_id, from, to, overdue } = req.query;
   try {
-    let query = `SELECT i.*, u.name as user_name, u.email as user_email, u.plan as user_plan
-                 FROM invoices i JOIN users u ON u.id = i.user_id WHERE 1=1`;
+    let query = `SELECT i.id, i.user_id, i.plan, i.amount, i.status, i.due_date, i.paid_at,
+                        i.payment_method, i.payment_gateway, i.created_at, i.updated_at,
+                        u.name as user_name, u.email as user_email, u.phone as user_phone,
+                        u.plan as user_plan, u.payment_status as user_payment_status,
+                        p.name as plan_name, p.billing_period,
+                        CASE WHEN i.status = 'pending' AND i.due_date < CURRENT_DATE
+                             THEN (CURRENT_DATE - i.due_date) ELSE 0 END AS days_overdue
+                 FROM invoices i
+                 JOIN users u ON u.id = i.user_id
+                 LEFT JOIN plans p ON p.slug = i.plan
+                 WHERE 1=1`;
     const params = [];
     let idx = 1;
     if (status) { query += ` AND i.status = $${idx++}`; params.push(status); }
     if (user_id) { query += ` AND i.user_id = $${idx++}`; params.push(user_id); }
-    query += ` ORDER BY i.created_at DESC LIMIT 100`;
+    if (from) { query += ` AND i.created_at >= $${idx++}`; params.push(from); }
+    if (to) { query += ` AND i.created_at < ($${idx++}::date + interval '1 day')`; params.push(to); }
+    if (overdue === '1' || overdue === 'true') {
+      query += ` AND i.status = 'pending' AND i.due_date < CURRENT_DATE`;
+    }
+    query += ` ORDER BY i.created_at DESC LIMIT 200`;
     const result = await pool.query(query, params);
-    return res.json(result.rows);
+
+    // Resumo pra tela de cobrança (totais por situação).
+    const summary = { count: result.rows.length, total_pending: 0, total_paid: 0, total_overdue: 0, overdue_count: 0 };
+    for (const r of result.rows) {
+      const amt = Number(r.amount) || 0;
+      if (r.status === 'paid') summary.total_paid += amt;
+      else if (r.status === 'pending') summary.total_pending += amt;
+      if (Number(r.days_overdue) > 0) { summary.total_overdue += amt; summary.overdue_count++; }
+    }
+    return res.json({ invoices: result.rows, summary });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
@@ -210,13 +253,16 @@ router.post('/invoices', async (req, res) => {
 // PUT /api/v1/admin/invoices/:id — atualizar status da fatura
 router.put('/invoices/:id', async (req, res) => {
   const { status } = req.body;
+  const ALLOWED = ['pending', 'paid', 'failed', 'cancelled'];
+  if (!ALLOWED.includes(status)) return res.status(400).json({ error: 'Status inválido' });
   try {
-    const updates = status === 'paid'
-      ? `status='paid', paid_at=now(), updated_at=now()`
-      : `status='${status}', updated_at=now()`;
-    const result = await pool.query(
-      `UPDATE invoices SET ${updates} WHERE id=$1 RETURNING *`, [req.params.id]
-    );
+    const result = status === 'paid'
+      ? await pool.query(
+          `UPDATE invoices SET status='paid', paid_at=now(), updated_at=now() WHERE id=$1 RETURNING *`,
+          [req.params.id])
+      : await pool.query(
+          `UPDATE invoices SET status=$1, updated_at=now() WHERE id=$2 RETURNING *`,
+          [status, req.params.id]);
     if (result.rowCount === 0) return res.status(404).json({ error: 'Fatura não encontrada' });
     // Se pago, ativar acesso do usuário
     if (status === 'paid') {
@@ -249,7 +295,7 @@ router.get('/settings', async (req, res) => {
 });
 
 // PUT /api/v1/admin/settings/:key — atualizar configuração
-router.put('/settings/:key', async (req, res) => {
+router.put('/settings/:key', adminOnly, async (req, res) => {
   const { value } = req.body;
   try {
     const result = await pool.query(
@@ -363,7 +409,7 @@ router.get('/audit', async (req, res) => {
 // clientes (não-admin) de uma vez: plan_expires_at = data de criação + ciclo do
 // plano (semanal=7, mensal=30, anual=365). Útil pra alinhar todo mundo à regra
 // depois de trocar planos em massa. Não mexe em payment_status.
-router.post('/recalculate-expiry', async (req, res) => {
+router.post('/recalculate-expiry', adminOnly, async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE users u

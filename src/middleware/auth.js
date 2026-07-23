@@ -51,7 +51,18 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
+// Equipe = admin OU gerente. Libera o Painel Administrativo (ver usuários,
+// auditoria, faturas/cobrança). As ações sensíveis (planos, perfis, exclusão)
+// continuam protegidas por requireAdmin.
+const requireStaff = (req, res, next) => {
+  if (!req.user || (!req.user.is_admin && req.user.role !== 'gerente')) {
+    return res.status(403).json({ error: 'Acesso negado. Apenas equipe (gerente ou admin).' });
+  }
+  next();
+};
+
 module.exports = {
   authenticateToken,
-  requireAdmin
+  requireAdmin,
+  requireStaff
 };
