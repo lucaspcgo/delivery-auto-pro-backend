@@ -137,4 +137,10 @@ app.listen(PORT, () => {
   } catch (err) {
     console.error('[server] falha ao iniciar schema de plans:', err.message);
   }
+  // Verificador automático de pagamentos do Cora (libera o plano quando paga)
+  try {
+    require('./services/cora-payment-poller').startCoraPaymentPolling();
+  } catch (err) {
+    console.error('[server] falha ao iniciar verificador de pagamento Cora:', err.message);
+  }
 });
