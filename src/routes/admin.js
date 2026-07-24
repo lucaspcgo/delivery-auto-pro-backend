@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const pool = require('../db/postgres');
 const { billingIntervalDays, planCycleDays } = require('../services/billing');
 const { trialDays } = require('../config/featureFlags');
+const { ensureAutomationSchema } = require('../services/autoAccept');
 const router = express.Router();
 
 const { JWT_SECRET } = require('../config/env');
@@ -540,6 +541,126 @@ router.get('/audit', async (req, res) => {
 
     return res.json({ summary: totals, warning_days: avisoDias, users: withStatus });
   } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/v1/admin/automation-audit — auditoria PROFUNDA da automação de um
+// usuário (e opcionalmente de uma loja): prova se a NOSSA automação deu o
+// "pronto" via API, com que frequência e em quanto tempo. Serve pra confrontar
+// o cliente que diz "a automação não funcionou".
+// Query: ?user_id=<obrigatório>&store=<app_shop_id opcional>&days=<janela, padrão 30>
+router.get('/automation-audit', async (req, res) => {
+  const n = (v) => parseInt(v, 10) || 0;
+  try {
+    await ensureAutomationSchema();
+    const userId = req.query.user_id;
+    if (!userId) return res.status(400).json({ error: 'user_id é obrigatório' });
+    const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
+    const store = req.query.store ? String(req.query.store) : null;
+
+    const user = await pool.query('SELECT id, name, email, plan, active FROM users WHERE id=$1', [userId]);
+    if (user.rows.length === 0) return res.status(404).json({ error: 'Usuário não encontrado' });
+
+    // Config de automação do usuário: mostra se está LIGADA e com quais atrasos.
+    // Se a regra de "pronto" estiver desligada, isso já explica o relato.
+    const rules = await pool.query(
+      `SELECT id, action, platform, enabled, accept_delay_seconds, delay_seconds, updated_at
+         FROM automation_rules WHERE user_id=$1 ORDER BY action ASC`, [userId]
+    );
+
+    // Filtro comum: usuário + janela (+ loja opcional).
+    const params = [userId];
+    let idx = 2;
+    let scope = `user_id = $1 AND created_at >= now() - ($${idx++} || ' days')::interval`;
+    params.push(String(days));
+    if (store) { scope += ` AND app_shop_id = $${idx++}`; params.push(store); }
+
+    // Números gerais da automação na janela.
+    const agg = await pool.query(
+      `SELECT
+         COUNT(*)                                                          AS total,
+         COUNT(*) FILTER (WHERE automation_accepted_at IS NOT NULL)        AS aceitos_auto,
+         COUNT(*) FILTER (WHERE automation_ready_at IS NOT NULL)           AS prontos_auto,
+         COUNT(*) FILTER (WHERE automation_dispatched_at IS NOT NULL)      AS despachados_auto,
+         COUNT(*) FILTER (WHERE status = 'cancelled')                      AS cancelados,
+         MAX(automation_ready_at)                                          AS ultimo_pronto_auto,
+         AVG(EXTRACT(EPOCH FROM (automation_ready_at - created_at)))
+           FILTER (WHERE automation_ready_at IS NOT NULL)                  AS seg_medio_ate_pronto
+       FROM orders WHERE ${scope}`, params
+    );
+    const a = agg.rows[0];
+    const total = n(a.total);
+    const prontosAuto = n(a.prontos_auto);
+    const pct = (x) => total > 0 ? Math.round((n(x) / total) * 100) : 0;
+
+    // Detalhamento por LOJA (app_shop_id) — mostra se alguma loja específica
+    // não está tendo o "pronto" automático.
+    const porLoja = await pool.query(
+      `SELECT app_shop_id,
+              COUNT(*)                                                   AS total,
+              COUNT(*) FILTER (WHERE automation_ready_at IS NOT NULL)    AS prontos_auto,
+              MAX(automation_ready_at)                                   AS ultimo_pronto_auto
+         FROM orders WHERE ${scope}
+        GROUP BY app_shop_id ORDER BY total DESC`, params
+    );
+
+    // Amostra dos pedidos recentes com a "prova": deu pronto pela automação
+    // (com horário) ou foi manual/gestor.
+    const amostra = await pool.query(
+      `SELECT id, platform, platform_order_id, app_shop_id, status,
+              created_at, updated_at,
+              automation_accepted_at, automation_ready_at, automation_dispatched_at
+         FROM orders WHERE ${scope}
+        ORDER BY created_at DESC LIMIT 30`, params
+    );
+
+    return res.json({
+      user: user.rows[0],
+      janela_dias: days,
+      loja_filtrada: store,
+      automacao_config: {
+        // Existe alguma regra ligada? (visão rápida)
+        alguma_ligada: rules.rows.some(r => r.enabled),
+        regras: rules.rows,
+      },
+      resumo: {
+        total_pedidos: total,
+        aceitos_automacao: n(a.aceitos_auto), aceitos_pct: pct(a.aceitos_auto),
+        prontos_automacao: prontosAuto, prontos_pct: pct(a.prontos_auto),
+        despachados_automacao: n(a.despachados_auto), despachados_pct: pct(a.despachados_auto),
+        cancelados: n(a.cancelados),
+        ultimo_pronto_automacao: a.ultimo_pronto_auto,
+        tempo_medio_ate_pronto_seg: a.seg_medio_ate_pronto != null ? Math.round(Number(a.seg_medio_ate_pronto)) : null,
+        // Veredito objetivo pra mostrar ao cliente.
+        veredito: prontosAuto > 0
+          ? `A automação deu "pronto" em ${prontosAuto} de ${total} pedidos (${pct(a.prontos_auto)}%) nos últimos ${days} dias.`
+          : (total > 0
+              ? `Nenhum pedido teve "pronto" pela automação nos últimos ${days} dias (${total} pedidos no período).`
+              : `Sem pedidos no período de ${days} dias.`),
+      },
+      por_loja: porLoja.rows.map(l => ({
+        app_shop_id: l.app_shop_id,
+        total: n(l.total),
+        prontos_automacao: n(l.prontos_auto),
+        prontos_pct: n(l.total) > 0 ? Math.round((n(l.prontos_auto) / n(l.total)) * 100) : 0,
+        ultimo_pronto_automacao: l.ultimo_pronto_auto,
+      })),
+      pedidos: amostra.rows.map(o => ({
+        id: o.id,
+        platform: o.platform,
+        platform_order_id: o.platform_order_id,
+        app_shop_id: o.app_shop_id,
+        status: o.status,
+        created_at: o.created_at,
+        updated_at: o.updated_at,
+        automation_accepted_at: o.automation_accepted_at,
+        automation_ready_at: o.automation_ready_at,
+        automation_dispatched_at: o.automation_dispatched_at,
+        pronto_via: o.automation_ready_at ? 'automação (API)' : 'manual/gestor',
+      })),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Erro na auditoria de automação', details: err.message });
+  }
 });
 
 // POST /api/v1/admin/recalculate-expiry — recalcula a validade de TODOS os
