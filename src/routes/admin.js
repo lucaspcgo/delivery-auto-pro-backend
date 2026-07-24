@@ -613,6 +613,22 @@ router.get('/automation-audit', async (req, res) => {
         ORDER BY created_at DESC LIMIT 30`, params
     );
 
+    // Mapa app_shop_id -> nome amigável da loja (restaurants.name), pra mostrar
+    // o NOME além do ID nas tabelas.
+    const nomes = {};
+    try {
+      const nm = await pool.query(
+        `SELECT rp.platform_merchant_id AS app_shop_id, r.name
+           FROM restaurant_platforms rp
+           JOIN restaurants r ON r.id = rp.restaurant_id
+          WHERE rp.user_id = $1`, [userId]
+      );
+      for (const row of nm.rows) if (row.app_shop_id != null) nomes[String(row.app_shop_id)] = row.name;
+    } catch (e) { /* tabela pode não existir em algum ambiente */ }
+    const lojaNome = (id) => (id != null && nomes[String(id)]) || null;
+
+    const prontosManual = total - prontosAuto; // reached ou não, mas sem carimbo da automação
+
     return res.json({
       user: user.rows[0],
       janela_dias: days,
@@ -628,6 +644,8 @@ router.get('/automation-audit', async (req, res) => {
         prontos_automacao: prontosAuto, prontos_pct: pct(a.prontos_auto),
         despachados_automacao: n(a.despachados_auto), despachados_pct: pct(a.despachados_auto),
         cancelados: n(a.cancelados),
+        sem_pronto_automacao: prontosManual, // pedidos sem carimbo da automação
+        lojas_no_periodo: porLoja.rows.length,
         ultimo_pronto_automacao: a.ultimo_pronto_auto,
         tempo_medio_ate_pronto_seg: a.seg_medio_ate_pronto != null ? Math.round(Number(a.seg_medio_ate_pronto)) : null,
         // Veredito objetivo pra mostrar ao cliente.
@@ -639,6 +657,7 @@ router.get('/automation-audit', async (req, res) => {
       },
       por_loja: porLoja.rows.map(l => ({
         app_shop_id: l.app_shop_id,
+        loja_nome: lojaNome(l.app_shop_id) || (l.app_shop_id ? `Loja ${l.app_shop_id}` : 'Sem loja identificada'),
         total: n(l.total),
         prontos_automacao: n(l.prontos_auto),
         prontos_pct: n(l.total) > 0 ? Math.round((n(l.prontos_auto) / n(l.total)) * 100) : 0,
@@ -649,6 +668,7 @@ router.get('/automation-audit', async (req, res) => {
         platform: o.platform,
         platform_order_id: o.platform_order_id,
         app_shop_id: o.app_shop_id,
+        loja_nome: lojaNome(o.app_shop_id) || (o.app_shop_id ? `Loja ${o.app_shop_id}` : null),
         status: o.status,
         created_at: o.created_at,
         updated_at: o.updated_at,
@@ -660,6 +680,71 @@ router.get('/automation-audit', async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ error: 'Erro na auditoria de automação', details: err.message });
+  }
+});
+
+// GET /api/v1/admin/automation-logs — LOG cronológico das ações que a automação
+// executou com SUCESSO (aceitou / marcou pronto / despachou via API). Cada
+// carimbo vira uma linha do log. É a "tela de logs da automação aprovada".
+// Query: ?user_id=<obrig.>&store=<opcional>&days=<padrão 30>&acao=<pronto|aceito|despachado|all>&limit=<padrão 100>
+router.get('/automation-logs', async (req, res) => {
+  try {
+    await ensureAutomationSchema();
+    const userId = req.query.user_id;
+    if (!userId) return res.status(400).json({ error: 'user_id é obrigatório' });
+    const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+    const store = req.query.store ? String(req.query.store) : null;
+    const acao = String(req.query.acao || 'all').toLowerCase();
+
+    const params = [userId, String(days)];
+    let idx = 3;
+    let scope = `user_id = $1 AND created_at >= now() - ($2 || ' days')::interval`;
+    if (store) { scope += ` AND app_shop_id = $${idx++}`; params.push(store); }
+
+    // Uma linha por carimbo (aceito/pronto/despachado). UNION ALL só das ações
+    // pedidas, sempre exigindo o carimbo preenchido (= a automação executou).
+    const blocos = [];
+    const querAceito = acao === 'all' || acao === 'aceito';
+    const querPronto = acao === 'all' || acao === 'pronto';
+    const querDesp   = acao === 'all' || acao === 'despachado';
+    if (querAceito) blocos.push(`SELECT platform, platform_order_id, app_shop_id, status, created_at, 'aceito' AS acao, automation_accepted_at AS quando FROM orders WHERE ${scope} AND automation_accepted_at IS NOT NULL`);
+    if (querPronto) blocos.push(`SELECT platform, platform_order_id, app_shop_id, status, created_at, 'pronto' AS acao, automation_ready_at AS quando FROM orders WHERE ${scope} AND automation_ready_at IS NOT NULL`);
+    if (querDesp)   blocos.push(`SELECT platform, platform_order_id, app_shop_id, status, created_at, 'despachado' AS acao, automation_dispatched_at AS quando FROM orders WHERE ${scope} AND automation_dispatched_at IS NOT NULL`);
+    if (blocos.length === 0) return res.status(400).json({ error: 'ação inválida' });
+
+    const sql = `${blocos.join(' UNION ALL ')} ORDER BY quando DESC LIMIT $${idx++}`;
+    const evRes = await pool.query(sql, [...params, limit]);
+
+    // Nomes das lojas.
+    const nomes = {};
+    try {
+      const nm = await pool.query(
+        `SELECT rp.platform_merchant_id AS app_shop_id, r.name
+           FROM restaurant_platforms rp JOIN restaurants r ON r.id = rp.restaurant_id
+          WHERE rp.user_id = $1`, [userId]
+      );
+      for (const row of nm.rows) if (row.app_shop_id != null) nomes[String(row.app_shop_id)] = row.name;
+    } catch (e) { /* ok */ }
+    const lojaNome = (id) => (id != null && nomes[String(id)]) || (id ? `Loja ${id}` : null);
+
+    const ACAO_LABEL = { aceito: 'Pedido aceito', pronto: 'Marcado pronto', despachado: 'Despachado' };
+    const logs = evRes.rows.map(e => ({
+      quando: e.quando,
+      acao: e.acao,
+      acao_label: ACAO_LABEL[e.acao] || e.acao,
+      resultado: 'aprovado', // só entram carimbos de sucesso
+      platform: e.platform,
+      platform_order_id: e.platform_order_id,
+      app_shop_id: e.app_shop_id,
+      loja_nome: lojaNome(e.app_shop_id),
+      status_atual: e.status,
+      criado_em: e.created_at,
+    }));
+
+    return res.json({ user_id: userId, janela_dias: days, loja_filtrada: store, acao, total: logs.length, logs });
+  } catch (err) {
+    return res.status(500).json({ error: 'Erro nos logs de automação', details: err.message });
   }
 });
 

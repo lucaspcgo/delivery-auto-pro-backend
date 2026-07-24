@@ -53,6 +53,11 @@ test('monta relatório com veredito, percentuais e por loja', async () => {
       { id: 'o2', platform: 'ifood', platform_order_id: 'A2', app_shop_id: 'shopB', status: 'entregue',
         created_at: '2026-07-23T08:58:00Z', updated_at: '2026-07-23T09:10:00Z',
         automation_accepted_at: null, automation_ready_at: null, automation_dispatched_at: null },
+    ] })
+    // nomes das lojas
+    .mockResolvedValueOnce({ rows: [
+      { app_shop_id: 'shopA', name: 'Hamburgueria Centro' },
+      { app_shop_id: 'shopB', name: 'Pizzaria Norte' },
     ] });
 
   const res = await request(app())
@@ -69,7 +74,38 @@ test('monta relatório com veredito, percentuais e por loja', async () => {
   expect(res.body.resumo.veredito).toMatch(/8 de 10/);
   expect(res.body.por_loja).toHaveLength(2);
   expect(res.body.por_loja[0].prontos_pct).toBe(100);
+  expect(res.body.por_loja[0].loja_nome).toBe('Hamburgueria Centro');
+  expect(res.body.resumo.sem_pronto_automacao).toBe(2); // 10 - 8
   // prova por pedido
   expect(res.body.pedidos[0].pronto_via).toBe('automação (API)');
+  expect(res.body.pedidos[0].loja_nome).toBe('Hamburgueria Centro');
   expect(res.body.pedidos[1].pronto_via).toBe('manual/gestor');
+});
+
+test('logs da automação: só eventos aprovados, com nome da loja', async () => {
+  pool.query
+    // eventos (UNION)
+    .mockResolvedValueOnce({ rows: [
+      { platform: 'ifood', platform_order_id: 'A1', app_shop_id: 'shopA', status: 'entregue',
+        created_at: '2026-07-24T09:58:00Z', acao: 'pronto', quando: '2026-07-24T10:00:00Z' },
+      { platform: 'ifood', platform_order_id: 'A1', app_shop_id: 'shopA', status: 'entregue',
+        created_at: '2026-07-24T09:58:00Z', acao: 'aceito', quando: '2026-07-24T09:58:30Z' },
+    ] })
+    // nomes
+    .mockResolvedValueOnce({ rows: [{ app_shop_id: 'shopA', name: 'Hamburgueria Centro' }] });
+
+  const res = await request(app())
+    .get('/admin/automation-logs?user_id=u1&days=30')
+    .set('Authorization', `Bearer ${adminToken()}`);
+
+  expect(res.status).toBe(200);
+  expect(res.body.total).toBe(2);
+  expect(res.body.logs[0].resultado).toBe('aprovado');
+  expect(res.body.logs[0].acao_label).toBe('Marcado pronto');
+  expect(res.body.logs[0].loja_nome).toBe('Hamburgueria Centro');
+});
+
+test('logs exigem user_id', async () => {
+  const res = await request(app()).get('/admin/automation-logs').set('Authorization', `Bearer ${adminToken()}`);
+  expect(res.status).toBe(400);
 });
