@@ -40,14 +40,17 @@ router.put('/:id', requireCapability('auto_accept'), async (req, res) => {
     // Aceita número OU texto ("30") — o front costuma mandar como string
     const asNum = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
     const asBool = (v) => (typeof v === 'boolean' ? v : (v === 'true' ? true : (v === 'false' ? false : null)));
+    // Trava os atrasos em faixas seguras: nada de negativo (quebraria o timer)
+    // nem valores absurdos. accept: até 15 min (trava de impressão); pronto: até 2h.
+    const clamp = (v, max) => Math.min(Math.max(Math.round(asNum(v)), 0), max);
 
     const fields = [];
     const values = [];
     let idx = 1;
     const enabledVal = asBool(enabled);
     if (enabledVal !== null) { fields.push(`enabled = $${idx++}`); values.push(enabledVal); }
-    if (delay_seconds != null && asNum(delay_seconds) != null) { fields.push(`delay_seconds = $${idx++}`); values.push(asNum(delay_seconds)); }
-    if (accept_delay_seconds != null && asNum(accept_delay_seconds) != null) { fields.push(`accept_delay_seconds = $${idx++}`); values.push(asNum(accept_delay_seconds)); }
+    if (delay_seconds != null && asNum(delay_seconds) != null) { fields.push(`delay_seconds = $${idx++}`); values.push(clamp(delay_seconds, 7200)); }
+    if (accept_delay_seconds != null && asNum(accept_delay_seconds) != null) { fields.push(`accept_delay_seconds = $${idx++}`); values.push(clamp(accept_delay_seconds, 900)); }
     if (fields.length === 0) return res.status(400).json({ error: 'Nada para atualizar' });
     fields.push(`updated_at = now()`);
     values.push(id);
