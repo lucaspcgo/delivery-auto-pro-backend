@@ -299,6 +299,93 @@ router.delete('/ifood/stores/:merchantId', async (req, res) => {
   }
 });
 
+// ===== Módulo MERCHANT (homologação iFood) ==================================
+// Confere se a loja (merchant) pertence ao usuário logado. Isolamento por conta.
+async function ownsMerchant(userId, merchantId) {
+  const r = await pool.query(
+    `SELECT 1 FROM restaurant_platforms
+      WHERE platform='ifood' AND platform_merchant_id=$1 AND user_id=$2 LIMIT 1`,
+    [String(merchantId), userId]
+  );
+  return r.rows.length > 0;
+}
+
+// Repassa o erro do iFood com o MESMO código HTTP (401/403/409/429/5xx) e um
+// corpo { error, code, details } — como a homologação exige no tratamento de erros.
+function sendIfoodError(res, err, fallbackMsg) {
+  const code = err.statusCode || 500;
+  if (err.retryAfter) res.set('Retry-After', String(err.retryAfter)); // 429
+  return res.status(code).json({
+    error: fallbackMsg,
+    code,
+    details: (err.body && (err.body.message || err.body.error)) || err.message,
+  });
+}
+
+// Middleware simples de posse da loja para as rotas de merchant.
+async function guardMerchant(req, res, next) {
+  try {
+    if (!(await ownsMerchant(req.user.id, req.params.merchantId))) {
+      return res.status(404).json({ error: 'Loja iFood não encontrada para este usuário' });
+    }
+    next();
+  } catch (e) { return res.status(500).json({ error: 'Erro ao validar loja', details: e.message }); }
+}
+
+// GET status da loja (OK/WARNING/CLOSED/ERROR)
+router.get('/ifood/merchants/:merchantId/status', guardMerchant, async (req, res) => {
+  try {
+    const data = await ifoodDistributed.getMerchantStatus(req.params.merchantId);
+    return res.json(data);
+  } catch (err) { return sendIfoodError(res, err, 'Erro ao consultar status da loja'); }
+});
+
+// GET interrupções (pausas) ativas
+router.get('/ifood/merchants/:merchantId/interruptions', guardMerchant, async (req, res) => {
+  try {
+    const data = await ifoodDistributed.getInterruptions(req.params.merchantId);
+    return res.json(Array.isArray(data) ? data : (data || []));
+  } catch (err) { return sendIfoodError(res, err, 'Erro ao listar pausas da loja'); }
+});
+
+// POST cria uma pausa (interrupção). Body: { description, start, end } (ISO 8601)
+router.post('/ifood/merchants/:merchantId/interruptions', guardMerchant, async (req, res) => {
+  const { description, start, end } = req.body;
+  if (!start || !end) return res.status(400).json({ error: 'start e end são obrigatórios', code: 400 });
+  try {
+    const data = await ifoodDistributed.createInterruption(req.params.merchantId, { description, start, end });
+    return res.status(201).json(data);
+  } catch (err) { return sendIfoodError(res, err, 'Erro ao criar pausa'); }
+});
+
+// DELETE remove uma pausa pelo id
+router.delete('/ifood/merchants/:merchantId/interruptions/:id', guardMerchant, async (req, res) => {
+  try {
+    await ifoodDistributed.deleteInterruption(req.params.merchantId, req.params.id);
+    return res.status(204).send();
+  } catch (err) { return sendIfoodError(res, err, 'Erro ao remover pausa'); }
+});
+
+// GET horários de funcionamento
+router.get('/ifood/merchants/:merchantId/opening-hours', guardMerchant, async (req, res) => {
+  try {
+    const data = await ifoodDistributed.getOpeningHours(req.params.merchantId);
+    return res.json(data);
+  } catch (err) { return sendIfoodError(res, err, 'Erro ao consultar horários'); }
+});
+
+// PUT atualiza horários. Body: { shifts: [{ dayOfWeek, start, duration }, ...] }
+router.put('/ifood/merchants/:merchantId/opening-hours', guardMerchant, async (req, res) => {
+  const shifts = req.body && req.body.shifts;
+  if (!Array.isArray(shifts) || shifts.length === 0) {
+    return res.status(400).json({ error: 'shifts (array de turnos) é obrigatório', code: 400 });
+  }
+  try {
+    const data = await ifoodDistributed.updateOpeningHours(req.params.merchantId, shifts);
+    return res.status(201).json(data || { success: true });
+  } catch (err) { return sendIfoodError(res, err, 'Erro ao atualizar horários'); }
+});
+
 // Desconecta TUDO do iFood do usuário: apaga vínculos, restaurantes só-iFood e
 // os acessos (tokens). Útil pra limpar lojas de teste e começar do zero.
 router.post('/ifood/disconnect', async (req, res) => {

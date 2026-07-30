@@ -283,7 +283,11 @@ function orderRequest(token, method, path, jsonBody) {
       res.on('data', c => data += c);
       res.on('end', () => {
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          return reject(new Error(`iFood ${method} ${path} -> HTTP ${res.statusCode}: ${data.slice(0, 300)}`));
+          const err = new Error(`iFood ${method} ${path} -> HTTP ${res.statusCode}: ${data.slice(0, 300)}`);
+          err.statusCode = res.statusCode;         // p/ o tratamento de erros (401/403/409/429/5xx)
+          err.retryAfter = res.headers['retry-after'] || null;
+          try { err.body = data ? JSON.parse(data) : null; } catch (e) { err.body = data || null; }
+          return reject(err);
         }
         try { resolve(data ? JSON.parse(data) : null); }
         catch (e) { resolve(data); }
@@ -402,6 +406,63 @@ async function acknowledgeEvents(token, eventIds) {
     eventIds.map(id => ({ id })));
 }
 
+// ===== Módulo MERCHANT (homologação) ========================================
+// Todas as ações usam o token da LOJA (modelo distribuído). Cada função é um
+// endpoint exigido no checklist de homologação do módulo Merchant.
+
+// Retry com backoff exponencial APENAS em erros 5xx (idempotente/seguro).
+// Exigência da homologação: "Implemente retry com backoff exponencial p/ 5xx".
+async function withRetry(fn, tries = 3) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try { return await fn(); }
+    catch (e) {
+      lastErr = e;
+      if (!(e.statusCode >= 500 && e.statusCode < 600)) throw e; // só 5xx tenta de novo
+      if (i < tries - 1) await new Promise(r => setTimeout(r, 500 * Math.pow(2, i))); // 0.5s, 1s, 2s
+    }
+  }
+  throw lastErr;
+}
+
+// GET status da loja (OK/WARNING/CLOSED/ERROR + validações is-connected, opening-hours...)
+async function getMerchantStatus(merchantId) {
+  const token = await getAccessTokenByMerchant(merchantId);
+  return withRetry(() => orderRequest(token, 'GET', `/merchant/v1.0/merchants/${merchantId}/status`, null));
+}
+
+// GET interrupções (pausas) ativas — array (pode vir vazio)
+async function getInterruptions(merchantId) {
+  const token = await getAccessTokenByMerchant(merchantId);
+  return withRetry(() => orderRequest(token, 'GET', `/merchant/v1.0/merchants/${merchantId}/interruptions`, null));
+}
+
+// POST cria uma pausa (interrupção). start/end em ISO 8601. Retorna 201 com id.
+async function createInterruption(merchantId, { description, start, end }) {
+  const token = await getAccessTokenByMerchant(merchantId);
+  return orderRequest(token, 'POST', `/merchant/v1.0/merchants/${merchantId}/interruptions`,
+    { description: description || 'Pausa', start, end });
+}
+
+// DELETE remove uma pausa pelo id. Retorna 204 (sem conteúdo).
+async function deleteInterruption(merchantId, interruptionId) {
+  const token = await getAccessTokenByMerchant(merchantId);
+  return orderRequest(token, 'DELETE', `/merchant/v1.0/merchants/${merchantId}/interruptions/${interruptionId}`, null);
+}
+
+// GET horários de funcionamento — array de turnos (dayOfWeek, start, duration).
+async function getOpeningHours(merchantId) {
+  const token = await getAccessTokenByMerchant(merchantId);
+  return withRetry(() => orderRequest(token, 'GET', `/merchant/v1.0/merchants/${merchantId}/opening-hours`, null));
+}
+
+// PUT atualiza os horários de funcionamento. shifts = array de turnos. Retorna 201.
+async function updateOpeningHours(merchantId, shifts) {
+  const token = await getAccessTokenByMerchant(merchantId);
+  return orderRequest(token, 'PUT', `/merchant/v1.0/merchants/${merchantId}/opening-hours`,
+    { shifts: Array.isArray(shifts) ? shifts : [] });
+}
+
 module.exports = {
   startAuthorization,
   completeAuthorization,
@@ -418,5 +479,12 @@ module.exports = {
   confirmOrder,
   readyToPickup,
   dispatchOrder,
-  cancelOrder
+  cancelOrder,
+  // Módulo Merchant (homologação)
+  getMerchantStatus,
+  getInterruptions,
+  createInterruption,
+  deleteInterruption,
+  getOpeningHours,
+  updateOpeningHours
 };
