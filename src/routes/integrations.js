@@ -278,21 +278,29 @@ router.delete('/ifood/stores/:merchantId', async (req, res) => {
     );
     if (rp.rows.length === 0) return res.status(404).json({ error: 'Loja iFood não encontrada' });
 
-    const restaurantId = rp.rows[0].restaurant_id;
-    await pool.query(`DELETE FROM restaurant_platforms WHERE id = $1`, [rp.rows[0].id]);
-
-    // Se o restaurante não tem mais nenhuma plataforma, remove o restaurante.
-    const outras = await pool.query(
-      `SELECT 1 FROM restaurant_platforms WHERE restaurant_id = $1 LIMIT 1`, [restaurantId]
+    // Apaga TODOS os vínculos dessa loja (pode haver registros duplicados — era
+    // o motivo de a loja "não sumir" da lista: antes só o primeiro era removido).
+    await pool.query(
+      `DELETE FROM restaurant_platforms
+        WHERE platform='ifood' AND platform_merchant_id=$1 AND user_id=$2`,
+      [String(merchantId), req.user.id]
     );
-    if (outras.rows.length === 0) {
-      await pool.query(`DELETE FROM restaurants WHERE id = $1 AND user_id = $2`, [restaurantId, req.user.id]);
+
+    // Remove os restaurantes que ficaram sem nenhuma plataforma.
+    const restaurantIds = [...new Set(rp.rows.map(r => r.restaurant_id))];
+    for (const restaurantId of restaurantIds) {
+      const outras = await pool.query(
+        `SELECT 1 FROM restaurant_platforms WHERE restaurant_id = $1 LIMIT 1`, [restaurantId]
+      );
+      if (outras.rows.length === 0) {
+        await pool.query(`DELETE FROM restaurants WHERE id = $1 AND user_id = $2`, [restaurantId, req.user.id]);
+      }
     }
 
     // Remove acessos iFood que ficaram sem nenhuma loja.
     await ifoodDistributed.pruneOrphanAuths(req.user.id, -1);
-    console.log(`[ifood stores] loja ${merchantId} removida (user ${req.user.id})`);
-    return res.json({ success: true });
+    console.log(`[ifood stores] loja ${merchantId} removida (${rp.rows.length} vínculo(s), user ${req.user.id})`);
+    return res.json({ success: true, removed: rp.rows.length });
   } catch (err) {
     console.error('[ifood stores delete] erro:', err.message);
     return res.status(500).json({ error: 'Erro ao remover loja iFood', details: err.message });
