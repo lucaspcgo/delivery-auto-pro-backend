@@ -422,6 +422,52 @@ router.post('/ifood/disconnect', async (req, res) => {
   }
 });
 
+// Limpa LOJAS DUPLICADAS do iFood: para cada loja (mesmo merchant), mantém só
+// UM vínculo (o mais recente) e apaga os repetidos. Depois remove restaurantes
+// órfãos. Não mexe em lojas distintas — só tira as cópias. Seguro pra rodar.
+router.post('/ifood/stores/dedupe', async (req, res) => {
+  try {
+    // Acha os vínculos duplicados (mesmo merchant, mesmo usuário) e marca todos
+    // menos o mais recente pra remoção.
+    const dups = await pool.query(
+      `SELECT id, restaurant_id FROM (
+         SELECT id, restaurant_id,
+                ROW_NUMBER() OVER (
+                  PARTITION BY platform_merchant_id
+                  ORDER BY updated_at DESC NULLS LAST, id DESC
+                ) AS rn
+         FROM restaurant_platforms
+         WHERE platform='ifood' AND user_id=$1 AND platform_merchant_id IS NOT NULL
+       ) t WHERE t.rn > 1`,
+      [req.user.id]
+    );
+
+    if (dups.rows.length === 0) {
+      return res.json({ success: true, removed: 0, message: 'Nenhuma loja duplicada encontrada.' });
+    }
+
+    const ids = dups.rows.map(r => r.id);
+    await pool.query(`DELETE FROM restaurant_platforms WHERE id = ANY($1)`, [ids]);
+
+    // Remove restaurantes que ficaram sem nenhuma plataforma.
+    const restaurantIds = [...new Set(dups.rows.map(r => r.restaurant_id))];
+    for (const restaurantId of restaurantIds) {
+      const outras = await pool.query(
+        `SELECT 1 FROM restaurant_platforms WHERE restaurant_id=$1 LIMIT 1`, [restaurantId]
+      );
+      if (outras.rows.length === 0) {
+        await pool.query(`DELETE FROM restaurants WHERE id=$1 AND user_id=$2`, [restaurantId, req.user.id]);
+      }
+    }
+    await ifoodDistributed.pruneOrphanAuths(req.user.id, -1);
+    console.log(`[ifood dedupe] user ${req.user.id}: ${ids.length} loja(s) duplicada(s) removida(s)`);
+    return res.json({ success: true, removed: ids.length });
+  } catch (err) {
+    console.error('[ifood dedupe] erro:', err.message);
+    return res.status(500).json({ error: 'Erro ao limpar lojas duplicadas', details: err.message });
+  }
+});
+
 // Recarrega o NOME REAL das lojas iFood já cadastradas (corrige "Loja sem nome"
 // / "Loja iFood"). Percorre cada acesso, busca os merchants e atualiza o nome.
 router.post('/ifood/stores/resync-names', async (req, res) => {
